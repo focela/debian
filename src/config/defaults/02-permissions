@@ -1,6 +1,0 @@
-#!/command/with-contenv bash
-
-# PERMISSIONS CONFIGURATION SETTINGS
-# -----------------------------------
-# Debugging Settings
-DEBUG_PERMISSIONS=${DEBUG_PERMISSIONS:-"FALSE"}
