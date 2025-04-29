@@ -1,0 +1,183 @@
+#!/command/with-contenv bash
+#
+# Container Monitoring Configuration
+# This script configures Zabbix monitoring agent settings and determines
+# the appropriate agent type based on the detected operating system.
+#
+
+set -euo pipefail
+IFS=$'\n\t'
+
+#--------------------------------------------------
+# Configuration
+#--------------------------------------------------
+
+# Zabbix agent configuration
+ZABBIX_AGENT_LOG_FILE=${ZABBIX_AGENT_LOG_FILE:-"zabbix_agentd.log"}
+ZABBIX_AGENT_LOG_PATH=${ZABBIX_AGENT_LOG_PATH:-"/var/log/zabbix/agent/"}
+ZABBIX_AGENT_TYPE=${ZABBIX_AGENT_TYPE:-""}
+ZABBIX_CONFIG_FILE=${ZABBIX_CONFIG_FILE:-"zabbix_agentd.conf"}
+ZABBIX_CONFIG_PATH=${ZABBIX_CONFIG_PATH:-"/etc/zabbix/"}
+ZABBIX_CERT_PATH=${ZABBIX_CERT_PATH:-"/etc/zabbix/certs/"}
+
+# Zabbix agent behavior configuration
+ZABBIX_ALLOW_ROOT=${ZABBIX_ALLOW_ROOT:-"1"}
+ZABBIX_BUFFER_SEND=${ZABBIX_BUFFER_SEND:-"5"}
+ZABBIX_BUFFER_SIZE=${ZABBIX_BUFFER_SIZE:-"100"}
+ZABBIX_DEBUGLEVEL=${ZABBIX_DEBUGLEVEL:-"1"}
+ZABBIX_ENABLE_AUTOREGISTER=${ZABBIX_ENABLE_AUTOREGISTER:-"TRUE"}
+ZABBIX_ENABLE_AUTOREGISTER_DNS=${ZABBIX_ENABLE_AUTOREGISTER_DNS:-"TRUE"}
+ZABBIX_LOG_FILE_SIZE=${ZABBIX_LOG_FILE_SIZE:-"0"}
+ZABBIX_MAXLINES_SECOND=${ZABBIX_MAXLINES_SECOND:-"20"}
+ZABBIX_REFRESH_ACTIVE_CHECKS=${ZABBIX_REFRESH_ACTIVE_CHECKS:-"120"}
+ZABBIX_REMOTECOMMANDS_ALLOW=${ZABBIX_REMOTECOMMANDS_ALLOW:-"*"}
+ZABBIX_REMOTECOMMANDS_LOG=${ZABBIX_REMOTECOMMANDS_LOG:-"1"}
+ZABBIX_START_AGENTS=${ZABBIX_START_AGENTS:-"1"}
+ZABBIX_USER_DOAS=${ZABBIX_USER_DOAS:-"TRUE"}
+ZABBIX_USER_SUDO=${ZABBIX_USER_SUDO:-"TRUE"}
+
+# Zabbix network settings
+ZABBIX_HOSTNAME=${ZABBIX_HOSTNAME:-"${CONTAINER_NAME:-$(hostname)}"}
+ZABBIX_LISTEN_IP=${ZABBIX_LISTEN_IP:-"0.0.0.0"}
+ZABBIX_LISTEN_PORT=${ZABBIX_LISTEN_PORT:-"10050"}
+ZABBIX_SERVER=${ZABBIX_SERVER:-"0.0.0.0/0"}
+ZABBIX_SERVER_ACTIVE=${ZABBIX_SERVER_ACTIVE:-"zabbix-proxy"}
+ZABBIX_STATUS_PORT=${ZABBIX_STATUS_PORT:-"8050"}
+
+# Zabbix system paths
+ZABBIX_PID=${ZABBIX_PID:-"/var/lib/zabbix/run/zabbix-agent.pid"}
+ZABBIX_SOCKET=${ZABBIX_SOCKET:-"/var/lib/zabbix/run/zabbix-agent.sock"}
+ZABBIX_USER=${ZABBIX_USER:-"zabbix"}
+ZABBIX_SETUP_TYPE=${ZABBIX_SETUP_TYPE:-"AUTO"}
+
+#--------------------------------------------------
+# Helper Functions
+#--------------------------------------------------
+
+# Detect OS type and version to determine appropriate Zabbix agent type
+detect_os_and_set_agent_type() {
+  local osId
+  local osVersion
+
+  # Extract OS ID using Bash parameter expansion instead of cat/grep/cut
+  if [[ -f /etc/os-release ]]; then
+    # Read the file once and process with bash
+    local osReleaseContent
+    osReleaseContent=$(<"/etc/os-release") || {
+      echo "ERROR: Failed to read /etc/os-release" >&2
+      return 1
+    }
+
+    # Extract ID using parameter expansion
+    osId=$(echo "$osReleaseContent" | grep "^ID=" | cut -d= -f2)
+
+    if [[ -z "$osId" ]]; then
+      echo "WARNING: Could not determine OS ID from /etc/os-release" >&2
+      return 1
+    fi
+
+    case "$osId" in
+      "alpine")
+        # Extract version using parameter expansion
+        osVersion=$(echo "$osReleaseContent" | grep "VERSION_ID" | cut -d= -f2 | cut -d. -f2 | cut -d_ -f1)
+
+        if [[ "$osVersion" == "edge" ]] || [[ "$osVersion" -ge 11 ]]; then
+          ZABBIX_AGENT_TYPE="modern"
+        else
+          ZABBIX_AGENT_TYPE="classic"
+        fi
+        ;;
+      "debian"|"ubuntu")
+        ZABBIX_AGENT_TYPE="modern"
+        ;;
+      *)
+        echo "WARNING: Unknown OS ID: $osId, defaulting to modern agent type" >&2
+        ZABBIX_AGENT_TYPE="modern"
+        ;;
+    esac
+  else
+    echo "WARNING: /etc/os-release not found, defaulting to modern agent type" >&2
+    ZABBIX_AGENT_TYPE="modern"
+  fi
+
+  echo "INFO: Selected Zabbix agent type: $ZABBIX_AGENT_TYPE"
+  return 0
+}
+
+# Validate required settings for Zabbix
+validate_zabbix_settings() {
+  # Check if monitoring is enabled in container configuration
+  if [[ "${CONTAINER_ENABLE_MONITORING:-TRUE}" != "TRUE" ]]; then
+    echo "INFO: Container monitoring is disabled, skipping Zabbix configuration" >&2
+    return 1
+  fi
+
+  # Verify critical directories exist
+  if [[ ! -d "$ZABBIX_CONFIG_PATH" ]]; then
+    echo "WARNING: Zabbix config directory $ZABBIX_CONFIG_PATH does not exist" >&2
+  fi
+
+  if [[ ! -d "$ZABBIX_AGENT_LOG_PATH" ]]; then
+    echo "WARNING: Zabbix log directory $ZABBIX_AGENT_LOG_PATH does not exist" >&2
+    # Create log directory with proper permissions
+    mkdir -p "$ZABBIX_AGENT_LOG_PATH" || {
+      echo "ERROR: Failed to create Zabbix log directory" >&2
+      return 1
+    }
+  fi
+
+  return 0
+}
+
+#--------------------------------------------------
+# Main Execution
+#--------------------------------------------------
+
+# Skip configuration if monitoring is disabled
+if [[ "${CONTAINER_ENABLE_MONITORING:-TRUE}" != "TRUE" ]]; then
+  echo "INFO: Container monitoring is disabled, skipping configuration"
+  exit 0
+fi
+
+# Detect OS and set appropriate agent type if not explicitly defined
+if [[ -z "$ZABBIX_AGENT_TYPE" ]]; then
+  detect_os_and_set_agent_type || {
+    echo "WARNING: Failed to detect OS type, defaulting to modern agent"
+    ZABBIX_AGENT_TYPE="modern"
+  }
+fi
+
+# Validate Zabbix settings
+validate_zabbix_settings
+
+# Export all Zabbix configuration variables for child processes
+export ZABBIX_AGENT_LOG_FILE
+export ZABBIX_AGENT_LOG_PATH
+export ZABBIX_AGENT_TYPE
+export ZABBIX_ALLOW_ROOT
+export ZABBIX_BUFFER_SEND
+export ZABBIX_BUFFER_SIZE
+export ZABBIX_CERT_PATH
+export ZABBIX_CONFIG_FILE
+export ZABBIX_CONFIG_PATH
+export ZABBIX_DEBUGLEVEL
+export ZABBIX_ENABLE_AUTOREGISTER
+export ZABBIX_ENABLE_AUTOREGISTER_DNS
+export ZABBIX_HOSTNAME
+export ZABBIX_LISTEN_IP
+export ZABBIX_LISTEN_PORT
+export ZABBIX_LOG_FILE_SIZE
+export ZABBIX_MAXLINES_SECOND
+export ZABBIX_PID
+export ZABBIX_REFRESH_ACTIVE_CHECKS
+export ZABBIX_REMOTECOMMANDS_ALLOW
+export ZABBIX_REMOTECOMMANDS_LOG
+export ZABBIX_SERVER
+export ZABBIX_SERVER_ACTIVE
+export ZABBIX_SETUP_TYPE
+export ZABBIX_SOCKET
+export ZABBIX_START_AGENTS
+export ZABBIX_STATUS_PORT
+export ZABBIX_USER
+export ZABBIX_USER_DOAS
+export ZABBIX_USER_SUDO

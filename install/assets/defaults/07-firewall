@@ -1,0 +1,191 @@
+#!/command/with-contenv bash
+#
+# Container Firewall Configuration
+# This script configures default settings for iptables firewall and Fail2ban
+# intrusion prevention services in the container environment.
+#
+
+set -euo pipefail
+IFS=$'\n\t'
+
+#--------------------------------------------------
+# Configuration
+#--------------------------------------------------
+
+# IPTables configuration
+IPTABLES_RULES_PATH=${IPTABLES_RULES_PATH:-"/assets/iptables/"}
+IPTABLES_RULES_FILE=${IPTABLES_RULES_FILE:-"iptables.rules"}
+
+# Fail2ban configuration
+FAIL2BAN_BACKEND=${FAIL2BAN_BACKEND:-"AUTO"}
+FAIL2BAN_CONFIG_PATH=${FAIL2BAN_CONFIG_PATH:-"/etc/fail2ban/"}
+FAIL2BAN_STARTUP_DELAY=${FAIL2BAN_STARTUP_DELAY:-"15"}
+FAIL2BAN_USE_DNS=${FAIL2BAN_USE_DNS:-"warn"}
+
+# Fail2ban database settings
+FAIL2BAN_DB_FILE=${FAIL2BAN_DB_FILE:-"fail2ban.sqlite3"}
+FAIL2BAN_DB_PATH=${FAIL2BAN_DB_PATH:-"/data/fail2ban/"}
+FAIL2BAN_DB_PURGE_AGE=${FAIL2BAN_DB_PURGE_AGE:-"86400"}
+FAIL2BAN_DB_TYPE=${FAIL2BAN_DB_TYPE:-"MEMORY"}
+
+# Fail2ban ban settings
+FAIL2BAN_IGNORE_IP=${FAIL2BAN_IGNORE_IP:-"127.0.0.1/8 ::1 172.16.0.0/12 192.168.0.0/24"}
+FAIL2BAN_IGNORE_SELF=${FAIL2BAN_IGNORE_SELF:-"TRUE"}
+FAIL2BAN_MAX_RETRY=${FAIL2BAN_MAX_RETRY:-"5"}
+FAIL2BAN_TIME_BAN=${FAIL2BAN_TIME_BAN:-"10m"}
+FAIL2BAN_TIME_FIND=${FAIL2BAN_TIME_FIND:-"10m"}
+
+# Fail2ban logging
+FAIL2BAN_LOG_PATH=${FAIL2BAN_LOG_PATH:-"/var/log/fail2ban/"}
+FAIL2BAN_LOG_FILE=${FAIL2BAN_LOG_FILE:-"fail2ban.log"}
+FAIL2BAN_LOG_LEVEL=${FAIL2BAN_LOG_LEVEL:-"INFO"}
+FAIL2BAN_LOG_TYPE=${FAIL2BAN_LOG_TYPE:-"FILE"}
+
+#--------------------------------------------------
+# Helper Functions
+#--------------------------------------------------
+
+# Log a message with timestamp
+log_firewall() {
+  local level="$1"
+  local message="$2"
+  local timestamp
+
+  timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+  echo "[$timestamp] [FIREWALL] $level: $message" >&2
+}
+
+# Validate IPTables configuration
+validate_iptables() {
+  # Check if firewall is enabled
+  if [[ "${CONTAINER_ENABLE_FIREWALL:-FALSE}" != "TRUE" ]]; then
+    log_firewall "INFO" "Firewall is disabled, skipping IPTables validation"
+    return 0
+  fi
+
+  # Check if backend is iptables
+  if [[ "${CONTAINER_FIREWALL_BACKEND:-iptables}" != "iptables" ]]; then
+    log_firewall "INFO" "Firewall backend is not IPTables, skipping validation"
+    return 0
+  fi
+
+  # Check if rules directory exists
+  if [[ ! -d "${IPTABLES_RULES_PATH}" ]]; then
+    log_firewall "WARNING" "IPTables rules directory does not exist: ${IPTABLES_RULES_PATH}"
+    mkdir -p "${IPTABLES_RULES_PATH}" || {
+      log_firewall "ERROR" "Failed to create IPTables rules directory"
+      return 1
+    }
+  fi
+
+  # Check for iptables command
+  if ! command -v iptables >/dev/null 2>&1; then
+    log_firewall "WARNING" "iptables command not found, firewall may not work properly"
+  fi
+
+  return 0
+}
+
+# Validate Fail2ban configuration
+validate_fail2ban() {
+  # Check if Fail2ban is enabled
+  if [[ "${CONTAINER_ENABLE_FAIL2BAN:-FALSE}" != "TRUE" ]]; then
+    log_firewall "INFO" "Fail2ban is disabled, skipping validation"
+    return 0
+  fi
+
+  # Check for config directory
+  if [[ ! -d "${FAIL2BAN_CONFIG_PATH}" ]]; then
+    log_firewall "WARNING" "Fail2ban config directory does not exist: ${FAIL2BAN_CONFIG_PATH}"
+    return 1
+  fi
+
+  # Ensure log directory exists
+  if [[ "${FAIL2BAN_LOG_TYPE}" == "FILE" && ! -d "${FAIL2BAN_LOG_PATH}" ]]; then
+    log_firewall "WARNING" "Fail2ban log directory does not exist: ${FAIL2BAN_LOG_PATH}"
+    mkdir -p "${FAIL2BAN_LOG_PATH}" || {
+      log_firewall "ERROR" "Failed to create Fail2ban log directory"
+      return 1
+    }
+  fi
+
+  # Ensure database directory exists if using file-based DB
+  if [[ "${FAIL2BAN_DB_TYPE}" == "FILE" && ! -d "${FAIL2BAN_DB_PATH}" ]]; then
+    log_firewall "WARNING" "Fail2ban database directory does not exist: ${FAIL2BAN_DB_PATH}"
+    mkdir -p "${FAIL2BAN_DB_PATH}" || {
+      log_firewall "ERROR" "Failed to create Fail2ban database directory"
+      return 1
+    }
+  fi
+
+  # Check for fail2ban-client command
+  if ! command -v fail2ban-client >/dev/null 2>&1; then
+    log_firewall "WARNING" "fail2ban-client command not found, Fail2ban may not work properly"
+  fi
+
+  # Validate time format for ban and find times
+  if ! [[ "${FAIL2BAN_TIME_BAN}" =~ ^[0-9]+[smhdwy]$ ]]; then
+    log_firewall "WARNING" "Invalid ban time format: ${FAIL2BAN_TIME_BAN}, should be a number followed by s, m, h, d, w, or y"
+  fi
+
+  if ! [[ "${FAIL2BAN_TIME_FIND}" =~ ^[0-9]+[smhdwy]$ ]]; then
+    log_firewall "WARNING" "Invalid find time format: ${FAIL2BAN_TIME_FIND}, should be a number followed by s, m, h, d, w, or y"
+  fi
+
+  return 0
+}
+
+#--------------------------------------------------
+# Main Execution
+#--------------------------------------------------
+
+# Skip all validation if both firewall and fail2ban are disabled
+if [[ "${CONTAINER_ENABLE_FIREWALL:-FALSE}" != "TRUE" && "${CONTAINER_ENABLE_FAIL2BAN:-FALSE}" != "TRUE" ]]; then
+  log_firewall "INFO" "Both firewall and Fail2ban are disabled, skipping configuration"
+  exit 0
+fi
+
+# Validate IPTables configuration if firewall is enabled
+if [[ "${CONTAINER_ENABLE_FIREWALL:-FALSE}" == "TRUE" ]]; then
+  validate_iptables || {
+    log_firewall "ERROR" "IPTables validation failed"
+    # Continue execution but log the error
+  }
+
+  log_firewall "INFO" "IPTables firewall configured with rules path: ${IPTABLES_RULES_PATH}${IPTABLES_RULES_FILE}"
+fi
+
+# Validate Fail2ban configuration if enabled
+if [[ "${CONTAINER_ENABLE_FAIL2BAN:-FALSE}" == "TRUE" ]]; then
+  validate_fail2ban || {
+    log_firewall "ERROR" "Fail2ban validation failed"
+    # Continue execution but log the error
+  }
+
+  log_firewall "INFO" "Fail2ban configured with backend: ${FAIL2BAN_BACKEND}"
+  log_firewall "INFO" "Fail2ban ban settings: max retry ${FAIL2BAN_MAX_RETRY}, ban time ${FAIL2BAN_TIME_BAN}, find time ${FAIL2BAN_TIME_FIND}"
+fi
+
+# Export all variables for child processes
+# Export IPTables variables
+export IPTABLES_RULES_PATH
+export IPTABLES_RULES_FILE
+
+# Export Fail2ban variables
+export FAIL2BAN_BACKEND
+export FAIL2BAN_CONFIG_PATH
+export FAIL2BAN_DB_FILE
+export FAIL2BAN_DB_PATH
+export FAIL2BAN_DB_PURGE_AGE
+export FAIL2BAN_DB_TYPE
+export FAIL2BAN_IGNORE_IP
+export FAIL2BAN_IGNORE_SELF
+export FAIL2BAN_LOG_PATH
+export FAIL2BAN_LOG_FILE
+export FAIL2BAN_LOG_LEVEL
+export FAIL2BAN_LOG_TYPE
+export FAIL2BAN_MAX_RETRY
+export FAIL2BAN_STARTUP_DELAY
+export FAIL2BAN_TIME_BAN
+export FAIL2BAN_TIME_FIND
+export FAIL2BAN_USE_DNS

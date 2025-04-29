@@ -1,0 +1,139 @@
+#!/command/with-contenv bash
+#
+# Container Scheduling Configuration
+# This script configures scheduling (cron) logging settings and validates
+# that scheduling services can run properly in the container environment.
+#
+
+set -euo pipefail
+IFS=$'\n\t'
+
+#--------------------------------------------------
+# Configuration
+#--------------------------------------------------
+
+# Scheduling logging settings
+SCHEDULING_LOG_TYPE=${SCHEDULING_LOG_TYPE:-"FILE"}
+SCHEDULING_LOG_LOCATION=${SCHEDULING_LOG_LOCATION:-"/var/log/cron/"}
+SCHEDULING_LOG_LEVEL=${SCHEDULING_LOG_LEVEL:-"8"}
+
+# Additional scheduling defaults
+SCHEDULING_USER=${SCHEDULING_USER:-"root"}
+SCHEDULING_ENABLED=${SCHEDULING_ENABLED:-"TRUE"}
+
+#--------------------------------------------------
+# Helper Functions
+#--------------------------------------------------
+
+# Log a message with timestamp
+log_scheduling() {
+  local logLevel="$1"
+  local message="$2"
+  local timestamp
+
+  timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
+  # Only log if the message level is <= configured log level
+  if [[ "$logLevel" -le "${SCHEDULING_LOG_LEVEL}" ]]; then
+    echo "[$timestamp] [SCHEDULING] $message" >&2
+  fi
+}
+
+# Check if cron log directory exists and is writable
+validate_log_location() {
+  # Skip validation if not logging to file
+  if [[ "${SCHEDULING_LOG_TYPE}" != "FILE" ]]; then
+    return 0
+  fi
+
+  # Check if log directory exists
+  if [[ ! -d "${SCHEDULING_LOG_LOCATION}" ]]; then
+    log_scheduling 1 "Log directory ${SCHEDULING_LOG_LOCATION} does not exist, creating it"
+
+    # Create log directory
+    mkdir -p "${SCHEDULING_LOG_LOCATION}" || {
+      log_scheduling 0 "ERROR: Failed to create log directory ${SCHEDULING_LOG_LOCATION}"
+      return 1
+    }
+  fi
+
+  # Check if log directory is writable
+  if [[ ! -w "${SCHEDULING_LOG_LOCATION}" ]]; then
+    log_scheduling 0 "ERROR: Log directory ${SCHEDULING_LOG_LOCATION} is not writable"
+    return 1
+  fi
+
+  return 0
+}
+
+# Initialize cron environment
+init_scheduling() {
+  # Validate container cron location
+  if [[ -z "${CONTAINER_SCHEDULING_LOCATION:-}" ]]; then
+    log_scheduling 2 "CONTAINER_SCHEDULING_LOCATION is not set, using default"
+    CONTAINER_SCHEDULING_LOCATION="/assets/cron/"
+  fi
+
+  # Check if cron directory exists
+  if [[ ! -d "${CONTAINER_SCHEDULING_LOCATION}" ]]; then
+    log_scheduling 1 "Cron directory ${CONTAINER_SCHEDULING_LOCATION} does not exist, creating it"
+
+    # Create cron directory
+    mkdir -p "${CONTAINER_SCHEDULING_LOCATION}" || {
+      log_scheduling 0 "ERROR: Failed to create cron directory ${CONTAINER_SCHEDULING_LOCATION}"
+      return 1
+    }
+  fi
+
+  # Validate cron backend
+  if [[ -z "${CONTAINER_SCHEDULING_BACKEND:-}" ]]; then
+    log_scheduling 2 "CONTAINER_SCHEDULING_BACKEND is not set, using default 'cron'"
+    CONTAINER_SCHEDULING_BACKEND="cron"
+  fi
+
+  # Ensure cron backend is valid
+  case "${CONTAINER_SCHEDULING_BACKEND}" in
+    "cron"|"crond")
+      log_scheduling 3 "Using ${CONTAINER_SCHEDULING_BACKEND} as scheduling backend"
+      ;;
+    *)
+      log_scheduling 1 "WARNING: Unknown scheduling backend ${CONTAINER_SCHEDULING_BACKEND}"
+      ;;
+  esac
+
+  return 0
+}
+
+#--------------------------------------------------
+# Main Execution
+#--------------------------------------------------
+
+# Skip configuration if scheduling is disabled
+if [[ "${CONTAINER_ENABLE_SCHEDULING:-TRUE}" != "TRUE" || "${SCHEDULING_ENABLED}" != "TRUE" ]]; then
+  log_scheduling 3 "Scheduling is disabled, skipping configuration"
+  exit 0
+fi
+
+# Initialize scheduling system
+init_scheduling || {
+  log_scheduling 0 "Failed to initialize scheduling system"
+  exit 1
+}
+
+# Validate log location
+validate_log_location || {
+  log_scheduling 0 "Failed to validate log location"
+  exit 1
+}
+
+# Log configuration status
+log_scheduling 4 "Scheduling configuration completed successfully"
+log_scheduling 5 "Log type: ${SCHEDULING_LOG_TYPE}, Log level: ${SCHEDULING_LOG_LEVEL}"
+log_scheduling 6 "Log location: ${SCHEDULING_LOG_LOCATION}"
+
+# Export variables for child processes
+export SCHEDULING_LOG_TYPE
+export SCHEDULING_LOG_LOCATION
+export SCHEDULING_LOG_LEVEL
+export SCHEDULING_USER
+export SCHEDULING_ENABLED
