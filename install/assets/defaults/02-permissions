@@ -1,0 +1,64 @@
+#!/command/with-contenv bash
+#
+# Permission settings configuration
+# Controls debugging output for permission changes in the container
+#
+
+set -euo pipefail
+IFS=$'\n\t'
+
+#--------------------------------------------------
+# Configuration
+#--------------------------------------------------
+# Enable detailed permission operation logging if set to TRUE
+DEBUG_PERMISSIONS=${DEBUG_PERMISSIONS:-"FALSE"}
+
+#--------------------------------------------------
+# Helper Functions
+#--------------------------------------------------
+# Log a message to stdout with appropriate formatting
+log_message() {
+  local level="$1"
+  local message="$2"
+
+  if [[ -n "${CONTAINER_ENABLE_LOG_PREFIX:-}" ]] && [[ "${CONTAINER_ENABLE_LOG_PREFIX}" == "TRUE" ]]; then
+    local dateFormat="${CONTAINER_LOG_PREFIX_DATE_FMT:-%Y-%m-%d}"
+    local timeFormat="${CONTAINER_LOG_PREFIX_TIME_FMT:-%H:%M:%S}"
+    local separator="${CONTAINER_LOG_PREFIX_SEPERATOR:-.}"
+
+    local dateStr
+    dateStr=$(date +"${dateFormat}")
+    local timeStr
+    timeStr=$(date +"${timeFormat}")
+
+    echo "[${dateStr}${separator}${timeStr}] [${level}] ${message}"
+  else
+    echo "[${level}] ${message}"
+  fi
+}
+
+# Validate permissions configuration
+validate_config() {
+  # Validate DEBUG_PERMISSIONS is a boolean value
+  if [[ "${DEBUG_PERMISSIONS}" != "TRUE" ]] && [[ "${DEBUG_PERMISSIONS}" != "FALSE" ]]; then
+    log_message "WARNING" "Invalid value for DEBUG_PERMISSIONS: ${DEBUG_PERMISSIONS}. Using default: FALSE"
+    DEBUG_PERMISSIONS="FALSE"
+  fi
+}
+
+#--------------------------------------------------
+# Main Execution
+#--------------------------------------------------
+# Validate configuration
+validate_config
+
+# Output debug information if container debugging is enabled
+if [[ "${DEBUG_MODE:-FALSE}" == "TRUE" ]]; then
+  log_message "DEBUG" "Permissions configuration loaded:"
+  log_message "DEBUG" "DEBUG_PERMISSIONS=${DEBUG_PERMISSIONS}"
+fi
+
+# Export variables to make them available to child processes
+export DEBUG_PERMISSIONS
+
+log_message "DEBUG" "Permissions defaults loaded successfully"

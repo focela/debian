@@ -1,0 +1,248 @@
+#!/command/with-contenv bash
+#
+# Logging configuration settings
+# Sets defaults for Fluent Bit log shipping and log rotation
+#
+
+set -euo pipefail
+IFS=$'\n\t'
+
+#--------------------------------------------------
+# Configuration
+#--------------------------------------------------
+# FluentBit general settings
+FLUENTBIT_MODE=${FLUENTBIT_MODE:-"NORMAL"}
+FLUENTBIT_SETUP_TYPE=${FLUENTBIT_SETUP_TYPE:-"AUTO"}
+FLUENTBIT_OUTPUT=${FLUENTBIT_OUTPUT:-"FORWARD"}
+FLUENTBIT_LOG_LEVEL=${FLUENTBIT_LOG_LEVEL:-"info"}
+FLUENTBIT_FLUSH_SECONDS=${FLUENTBIT_FLUSH_SECONDS:-"1"}
+FLUENTBIT_GRACE_SECONDS=${FLUENTBIT_GRACE_SECONDS:-"1"}
+
+# FluentBit file paths
+FLUENTBIT_CONFIG_PARSERS=${FLUENTBIT_CONFIG_PARSERS:-"parsers.conf"}
+FLUENTBIT_CONFIG_PLUGINS=${FLUENTBIT_CONFIG_PLUGINS:-"plugins.conf"}
+FLUENTBIT_LOG_FILE=${FLUENTBIT_LOG_FILE:-"fluentbit.log"}
+FLUENTBIT_LOG_PATH=${FLUENTBIT_LOG_PATH:-"/var/log/fluentbit/"}
+
+# FluentBit HTTP server settings
+FLUENTBIT_ENABLE_HTTP_SERVER=${FLUENTBIT_ENABLE_HTTP_SERVER:-"TRUE"}
+FLUENTBIT_HTTP_LISTEN_IP=${FLUENTBIT_HTTP_LISTEN_IP:-"0.0.0.0"}
+FLUENTBIT_HTTP_LISTEN_PORT=${FLUENTBIT_HTTP_LISTEN_PORT:-"2020"}
+
+# FluentBit storage settings
+FLUENTBIT_ENABLE_STORAGE_METRICS=${FLUENTBIT_ENABLE_STORAGE_METRICS:-"TRUE"}
+FLUENTBIT_STORAGE_PATH=${FLUENTBIT_STORAGE_PATH:-"/tmp/fluentbit/storage"}
+FLUENTBIT_STORAGE_SYNC=${FLUENTBIT_STORAGE_SYNC:-"normal"}
+FLUENTBIT_STORAGE_CHECKSUM=${FLUENTBIT_STORAGE_CHECKSUM:-"FALSE"}
+FLUENTBIT_STORAGE_BACKLOG_LIMIT=${FLUENTBIT_STORAGE_BACKLOG_LIMIT:-"5M"}
+
+# FluentBit forward output settings
+FLUENTBIT_FORWARD_PORT=${FLUENTBIT_FORWARD_PORT:-"24224"}
+FLUENTBIT_FORWARD_BUFFER_CHUNK_SIZE=${FLUENTBIT_FORWARD_BUFFER_CHUNK_SIZE:-"1M"}
+FLUENTBIT_FORWARD_BUFFER_MAX_SIZE=${FLUENTBIT_FORWARD_BUFFER_MAX_SIZE:-"6M"}
+FLUENTBIT_OUTPUT_FORWARD_HOST=${FLUENTBIT_OUTPUT_FORWARD_HOST:-"fluent-proxy"}
+FLUENTBIT_OUTPUT_FORWARD_TLS=${FLUENTBIT_OUTPUT_FORWARD_TLS:-"FALSE"}
+FLUENTBIT_OUTPUT_FORWARD_TLS_VERIFY=${FLUENTBIT_OUTPUT_FORWARD_TLS_VERIFY:-"FALSE"}
+
+# FluentBit Loki output settings
+FLUENTBIT_OUTPUT_LOKI_HOST=${FLUENTBIT_OUTPUT_LOKI_HOST:-"loki"}
+FLUENTBIT_OUTPUT_LOKI_PORT=${FLUENTBIT_OUTPUT_LOKI_PORT:-"3100"}
+FLUENTBIT_OUTPUT_LOKI_TLS=${FLUENTBIT_OUTPUT_LOKI_TLS:-"FALSE"}
+FLUENTBIT_OUTPUT_LOKI_TLS_VERIFY=${FLUENTBIT_OUTPUT_LOKI_TLS_VERIFY:-"FALSE"}
+FLUENTBIT_OUTPUT_LOKI_COMPRESS_GZIP=${FLUENTBIT_OUTPUT_LOKI_COMPRESS_GZIP:-"gzip"}
+
+# FluentBit tail input settings
+FLUENTBIT_TAIL_BUFFER_CHUNK_SIZE=${FLUENTBIT_TAIL_BUFFER_CHUNK_SIZE:-"32k"}
+FLUENTBIT_TAIL_BUFFER_MAX_SIZE=${FLUENTBIT_TAIL_BUFFER_MAX_SIZE:-"32k"}
+FLUENTBIT_TAIL_READ_FROM_HEAD=${FLUENTBIT_TAIL_READ_FROM_HEAD:-"FALSE"}
+FLUENTBIT_TAIL_SKIP_EMPTY_LINES=${FLUENTBIT_TAIL_SKIP_EMPTY_LINES:-"TRUE"}
+FLUENTBIT_TAIL_SKIP_LONG_LINES=${FLUENTBIT_TAIL_SKIP_LONG_LINES:-"TRUE"}
+FLUENTBIT_TAIL_KEY_PATH_ENABLE=${FLUENTBIT_TAIL_KEY_PATH_ENABLE:-"TRUE"}
+FLUENTBIT_TAIL_KEY_PATH=${FLUENTBIT_TAIL_KEY_PATH:-"filename"}
+FLUENTBIT_TAIL_KEY_OFFSET_ENABLE=${FLUENTBIT_TAIL_KEY_OFFSET_ENABLE:-"FALSE"}
+FLUENTBIT_TAIL_KEY_OFFSET=${FLUENTBIT_TAIL_KEY_OFFSET:-"offset"}
+
+# FluentBit tail DB settings
+FLUENTBIT_TAIL_DB_ENABLE=${FLUENTBIT_TAIL_DB_ENABLE:-"TRUE"}
+FLUENTBIT_TAIL_DB_SYNC=${FLUENTBIT_TAIL_DB_SYNC:-"normal"}
+FLUENTBIT_TAIL_DB_LOCK=${FLUENTBIT_TAIL_DB_LOCK:-"TRUE"}
+FLUENTBIT_TAIL_DB_JOURNAL_MODE=${FLUENTBIT_TAIL_DB_JOURNAL_MODE:-"WAL"}
+
+# LogRotate settings
+LOGROTATE_RETAIN_DAYS=${LOGROTATE_RETAIN_DAYS:-"7"}
+LOGROTATE_COMPRESSION_VALUE=${LOGROTATE_COMPRESSION_VALUE:-"8"}
+LOGSHIPPING_AUTO_CONFIG_LOGROTATE=${LOGSHIPPING_AUTO_CONFIG_LOGROTATE:-"TRUE"}
+
+#--------------------------------------------------
+# Helper Functions
+#--------------------------------------------------
+# Log a message to stdout with appropriate formatting
+log_message() {
+  local level="$1"
+  local message="$2"
+
+  if [[ -n "${CONTAINER_ENABLE_LOG_PREFIX:-}" ]] && [[ "${CONTAINER_ENABLE_LOG_PREFIX}" == "TRUE" ]]; then
+    local dateFormat="${CONTAINER_LOG_PREFIX_DATE_FMT:-%Y-%m-%d}"
+    local timeFormat="${CONTAINER_LOG_PREFIX_TIME_FMT:-%H:%M:%S}"
+    local separator="${CONTAINER_LOG_PREFIX_SEPERATOR:-.}"
+
+    local dateStr
+    dateStr=$(date +"${dateFormat}")
+    local timeStr
+    timeStr=$(date +"${timeFormat}")
+
+    echo "[${dateStr}${separator}${timeStr}] [${level}] ${message}"
+  else
+    echo "[${level}] ${message}"
+  fi
+}
+
+# Detect OS version and set appropriate compression type
+detect_os_for_compression() {
+  if [[ ! -f "/etc/os-release" ]]; then
+    log_message "WARNING" "Cannot detect OS: /etc/os-release not found"
+    return 1
+  }
+
+  local osVer
+  if ! osVer=$(grep -E "VERSION_ID" /etc/os-release | cut -d= -f2 | tr -d '"' | cut -d. -f1,2); then
+    log_message "WARNING" "Failed to detect OS version"
+    return 1
+  }
+
+  case "${osVer}" in
+    "3.5"|"3.8")
+      LOGROTATE_COMPRESSION_TYPE="gzip"
+      log_message "DEBUG" "Detected Alpine ${osVer}, using gzip compression"
+      ;;
+    *)
+      LOGROTATE_COMPRESSION_TYPE=${LOGROTATE_COMPRESSION_TYPE:-"zstd"}
+      log_message "DEBUG" "Using ${LOGROTATE_COMPRESSION_TYPE} compression"
+      ;;
+  esac
+
+  return 0
+}
+
+# Validate FluentBit configuration
+validate_fluentbit_config() {
+  # Validate log level
+  case "${FLUENTBIT_LOG_LEVEL}" in
+    "error"|"warning"|"info"|"debug"|"trace")
+      # Valid log level
+      ;;
+    *)
+      log_message "WARNING" "Invalid FLUENTBIT_LOG_LEVEL: ${FLUENTBIT_LOG_LEVEL}. Using default: info"
+      FLUENTBIT_LOG_LEVEL="info"
+      ;;
+  esac
+
+  # Validate output type
+  case "${FLUENTBIT_OUTPUT}" in
+    "FORWARD"|"LOKI")
+      # Valid output type
+      ;;
+    *)
+      log_message "WARNING" "Invalid FLUENTBIT_OUTPUT: ${FLUENTBIT_OUTPUT}. Using default: FORWARD"
+      FLUENTBIT_OUTPUT="FORWARD"
+      ;;
+  esac
+
+  # Ensure log directory exists
+  if [[ ! -d "${FLUENTBIT_LOG_PATH}" ]]; then
+    log_message "INFO" "Creating FluentBit log directory: ${FLUENTBIT_LOG_PATH}"
+    mkdir -p "${FLUENTBIT_LOG_PATH}" || {
+      log_message "ERROR" "Failed to create log directory: ${FLUENTBIT_LOG_PATH}"
+      return 1
+    }
+  fi
+
+  # Ensure storage directory exists
+  if [[ ! -d "${FLUENTBIT_STORAGE_PATH}" ]]; then
+    log_message "INFO" "Creating FluentBit storage directory: ${FLUENTBIT_STORAGE_PATH}"
+    mkdir -p "${FLUENTBIT_STORAGE_PATH}" || {
+      log_message "ERROR" "Failed to create storage directory: ${FLUENTBIT_STORAGE_PATH}"
+      return 1
+    }
+  }
+
+  return 0
+}
+
+#--------------------------------------------------
+# Main Execution
+#--------------------------------------------------
+# Detect OS version for logrotate compression type
+detect_os_for_compression || {
+  log_message "WARNING" "OS detection failed, using default compression type"
+}
+
+# Validate FluentBit configuration if log shipping is enabled
+if [[ "${CONTAINER_ENABLE_LOGSHIPPING:-FALSE}" == "TRUE" ]]; then
+  if [[ "${CONTAINER_LOGSHIPPING_BACKEND:-fluent-bit}" == "fluent-bit" ]]; then
+    validate_fluentbit_config || {
+      log_message "ERROR" "Failed to validate FluentBit configuration"
+      exit 1
+    }
+  fi
+fi
+
+# Output debug information if enabled
+if [[ "${DEBUG_MODE:-FALSE}" == "TRUE" ]]; then
+  log_message "DEBUG" "Logging configuration loaded:"
+  log_message "DEBUG" "FLUENTBIT_MODE=${FLUENTBIT_MODE}"
+  log_message "DEBUG" "FLUENTBIT_OUTPUT=${FLUENTBIT_OUTPUT}"
+  log_message "DEBUG" "FLUENTBIT_LOG_LEVEL=${FLUENTBIT_LOG_LEVEL}"
+  log_message "DEBUG" "LOGROTATE_COMPRESSION_TYPE=${LOGROTATE_COMPRESSION_TYPE}"
+  log_message "DEBUG" "LOGROTATE_RETAIN_DAYS=${LOGROTATE_RETAIN_DAYS}"
+fi
+
+# Export all variables to make them available to child processes
+export FLUENTBIT_CONFIG_PARSERS
+export FLUENTBIT_CONFIG_PLUGINS
+export FLUENTBIT_ENABLE_HTTP_SERVER
+export FLUENTBIT_ENABLE_STORAGE_METRICS
+export FLUENTBIT_FLUSH_SECONDS
+export FLUENTBIT_FORWARD_BUFFER_CHUNK_SIZE
+export FLUENTBIT_FORWARD_BUFFER_MAX_SIZE
+export FLUENTBIT_FORWARD_PORT
+export FLUENTBIT_GRACE_SECONDS
+export FLUENTBIT_HTTP_LISTEN_IP
+export FLUENTBIT_HTTP_LISTEN_PORT
+export FLUENTBIT_LOG_FILE
+export FLUENTBIT_LOG_LEVEL
+export FLUENTBIT_LOG_PATH
+export FLUENTBIT_MODE
+export FLUENTBIT_OUTPUT
+export FLUENTBIT_OUTPUT_FORWARD_HOST
+export FLUENTBIT_OUTPUT_FORWARD_TLS
+export FLUENTBIT_OUTPUT_FORWARD_TLS_VERIFY
+export FLUENTBIT_OUTPUT_LOKI_COMPRESS_GZIP
+export FLUENTBIT_OUTPUT_LOKI_HOST
+export FLUENTBIT_OUTPUT_LOKI_PORT
+export FLUENTBIT_OUTPUT_LOKI_TLS
+export FLUENTBIT_OUTPUT_LOKI_TLS_VERIFY
+export FLUENTBIT_SETUP_TYPE
+export FLUENTBIT_STORAGE_BACKLOG_LIMIT
+export FLUENTBIT_STORAGE_CHECKSUM
+export FLUENTBIT_STORAGE_PATH
+export FLUENTBIT_STORAGE_SYNC
+export FLUENTBIT_TAIL_BUFFER_CHUNK_SIZE
+export FLUENTBIT_TAIL_BUFFER_MAX_SIZE
+export FLUENTBIT_TAIL_DB_ENABLE
+export FLUENTBIT_TAIL_DB_JOURNAL_MODE
+export FLUENTBIT_TAIL_DB_LOCK
+export FLUENTBIT_TAIL_DB_SYNC
+export FLUENTBIT_TAIL_KEY_OFFSET
+export FLUENTBIT_TAIL_KEY_OFFSET_ENABLE
+export FLUENTBIT_TAIL_KEY_PATH
+export FLUENTBIT_TAIL_KEY_PATH_ENABLE
+export FLUENTBIT_TAIL_READ_FROM_HEAD
+export FLUENTBIT_TAIL_SKIP_EMPTY_LINES
+export FLUENTBIT_TAIL_SKIP_LONG_LINES
+export LOGROTATE_COMPRESSION_TYPE
+export LOGROTATE_COMPRESSION_VALUE
+export LOGROTATE_RETAIN_DAYS
+export LOGSHIPPING_AUTO_CONFIG_LOGROTATE
+
+log_message "DEBUG" "Logging defaults loaded successfully"

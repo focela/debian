@@ -1,0 +1,100 @@
+#!/command/with-contenv bash
+#
+# Scheduling configuration settings
+# Sets defaults for cron and task scheduling in containerized environments
+#
+
+set -euo pipefail
+IFS=$'\n\t'
+
+#--------------------------------------------------
+# Configuration
+#--------------------------------------------------
+# Log configuration for scheduled tasks
+SCHEDULING_LOG_TYPE=${SCHEDULING_LOG_TYPE:-"FILE"}
+SCHEDULING_LOG_LOCATION=${SCHEDULING_LOG_LOCATION:-"/var/log/cron/"}
+SCHEDULING_LOG_LEVEL=${SCHEDULING_LOG_LEVEL:-"8"}
+
+#--------------------------------------------------
+# Helper Functions
+#--------------------------------------------------
+# Log a message to stdout with appropriate formatting
+log_message() {
+  local level="$1"
+  local message="$2"
+
+  if [[ -n "${CONTAINER_ENABLE_LOG_PREFIX:-}" ]] && [[ "${CONTAINER_ENABLE_LOG_PREFIX}" == "TRUE" ]]; then
+    local dateFormat="${CONTAINER_LOG_PREFIX_DATE_FMT:-%Y-%m-%d}"
+    local timeFormat="${CONTAINER_LOG_PREFIX_TIME_FMT:-%H:%M:%S}"
+    local separator="${CONTAINER_LOG_PREFIX_SEPERATOR:-.}"
+
+    local dateStr
+    dateStr=$(date +"${dateFormat}")
+    local timeStr
+    timeStr=$(date +"${timeFormat}")
+
+    echo "[${dateStr}${separator}${timeStr}] [${level}] ${message}"
+  else
+    echo "[${level}] ${message}"
+  fi
+}
+
+# Validate scheduling configuration
+validate_config() {
+  # Validate SCHEDULING_LOG_TYPE is valid (FILE or STDOUT)
+  if [[ "${SCHEDULING_LOG_TYPE}" != "FILE" ]] && [[ "${SCHEDULING_LOG_TYPE}" != "STDOUT" ]]; then
+    log_message "WARNING" "Invalid SCHEDULING_LOG_TYPE: ${SCHEDULING_LOG_TYPE}. Using default: FILE"
+    SCHEDULING_LOG_TYPE="FILE"
+  fi
+
+  # Validate SCHEDULING_LOG_LEVEL is a number
+  if ! [[ "${SCHEDULING_LOG_LEVEL}" =~ ^[0-9]+$ ]]; then
+    log_message "WARNING" "Invalid SCHEDULING_LOG_LEVEL: ${SCHEDULING_LOG_LEVEL}. Using default: 8"
+    SCHEDULING_LOG_LEVEL="8"
+  fi
+
+  # Ensure log directory exists if using FILE logging
+  if [[ "${SCHEDULING_LOG_TYPE}" == "FILE" ]] && [[ ! -d "${SCHEDULING_LOG_LOCATION}" ]]; then
+    log_message "INFO" "Creating scheduling log directory: ${SCHEDULING_LOG_LOCATION}"
+    mkdir -p "${SCHEDULING_LOG_LOCATION}" || {
+      log_message "ERROR" "Failed to create log directory: ${SCHEDULING_LOG_LOCATION}"
+      return 1
+    }
+  fi
+
+  return 0
+}
+
+#--------------------------------------------------
+# Main Execution
+#--------------------------------------------------
+# Validate configuration if scheduling is enabled
+if [[ "${CONTAINER_ENABLE_SCHEDULING:-FALSE}" == "TRUE" ]]; then
+  validate_config || {
+    log_message "ERROR" "Failed to validate scheduling configuration"
+    exit 1
+  }
+
+  # Check log directory permissions if using FILE logging
+  if [[ "${SCHEDULING_LOG_TYPE}" == "FILE" ]]; then
+    if [[ ! -w "${SCHEDULING_LOG_LOCATION}" ]]; then
+      log_message "WARNING" "Scheduling log directory is not writable: ${SCHEDULING_LOG_LOCATION}"
+      log_message "WARNING" "Scheduled tasks may fail to log properly"
+    fi
+  fi
+fi
+
+# Output debug information if enabled
+if [[ "${DEBUG_MODE:-FALSE}" == "TRUE" ]]; then
+  log_message "DEBUG" "Scheduling configuration loaded:"
+  log_message "DEBUG" "SCHEDULING_LOG_TYPE=${SCHEDULING_LOG_TYPE}"
+  log_message "DEBUG" "SCHEDULING_LOG_LOCATION=${SCHEDULING_LOG_LOCATION}"
+  log_message "DEBUG" "SCHEDULING_LOG_LEVEL=${SCHEDULING_LOG_LEVEL}"
+fi
+
+# Export variables to make them available to child processes
+export SCHEDULING_LOG_TYPE
+export SCHEDULING_LOG_LOCATION
+export SCHEDULING_LOG_LEVEL
+
+log_message "DEBUG" "Scheduling defaults loaded successfully"

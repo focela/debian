@@ -1,0 +1,232 @@
+#!/command/with-contenv bash
+#
+# Firewall configuration settings
+# Sets defaults for iptables firewall and fail2ban service
+#
+
+set -euo pipefail
+IFS=$'\n\t'
+
+#--------------------------------------------------
+# Configuration
+#--------------------------------------------------
+# IPTables configuration
+IPTABLES_RULES_PATH=${IPTABLES_RULES_PATH:-"/assets/iptables/"}
+IPTABLES_RULES_FILE=${IPTABLES_RULES_FILE:-"iptables.rules"}
+
+# Fail2Ban basic settings
+FAIL2BAN_BACKEND=${FAIL2BAN_BACKEND:-"AUTO"}
+FAIL2BAN_CONFIG_PATH=${FAIL2BAN_CONFIG_PATH:-"/etc/fail2ban/"}
+FAIL2BAN_STARTUP_DELAY=${FAIL2BAN_STARTUP_DELAY:-"15"}
+FAIL2BAN_USE_DNS=${FAIL2BAN_USE_DNS:-"warn"}
+
+# Fail2Ban database settings
+FAIL2BAN_DB_FILE=${FAIL2BAN_DB_FILE:-"fail2ban.sqlite3"}
+FAIL2BAN_DB_PATH=${FAIL2BAN_DB_PATH:-"/data/fail2ban/"}
+FAIL2BAN_DB_PURGE_AGE=${FAIL2BAN_DB_PURGE_AGE:-"86400"}
+FAIL2BAN_DB_TYPE=${FAIL2BAN_DB_TYPE:-"MEMORY"}
+
+# Fail2Ban logging configuration
+FAIL2BAN_LOG_PATH=${FAIL2BAN_LOG_PATH:-"/var/log/fail2ban/"}
+FAIL2BAN_LOG_FILE=${FAIL2BAN_LOG_FILE:-"fail2ban.log"}
+FAIL2BAN_LOG_LEVEL=${FAIL2BAN_LOG_LEVEL:-"INFO"}
+FAIL2BAN_LOG_TYPE=${FAIL2BAN_LOG_TYPE:-"FILE"}
+
+# Fail2Ban jail configuration
+FAIL2BAN_IGNORE_IP=${FAIL2BAN_IGNORE_IP:-"127.0.0.1/8 ::1 172.16.0.0/12 192.168.0.0/24"}
+FAIL2BAN_IGNORE_SELF=${FAIL2BAN_IGNORE_SELF:-"TRUE"}
+FAIL2BAN_MAX_RETRY=${FAIL2BAN_MAX_RETRY:-"5"}
+FAIL2BAN_TIME_BAN=${FAIL2BAN_TIME_BAN:-"10m"}
+FAIL2BAN_TIME_FIND=${FAIL2BAN_TIME_FIND:-"10m"}
+
+#--------------------------------------------------
+# Helper Functions
+#--------------------------------------------------
+# Log a message to stdout with appropriate formatting
+log_message() {
+  local level="$1"
+  local message="$2"
+
+  if [[ -n "${CONTAINER_ENABLE_LOG_PREFIX:-}" ]] && [[ "${CONTAINER_ENABLE_LOG_PREFIX}" == "TRUE" ]]; then
+    local dateFormat="${CONTAINER_LOG_PREFIX_DATE_FMT:-%Y-%m-%d}"
+    local timeFormat="${CONTAINER_LOG_PREFIX_TIME_FMT:-%H:%M:%S}"
+    local separator="${CONTAINER_LOG_PREFIX_SEPERATOR:-.}"
+
+    local dateStr
+    dateStr=$(date +"${dateFormat}")
+    local timeStr
+    timeStr=$(date +"${timeFormat}")
+
+    echo "[${dateStr}${separator}${timeStr}] [${level}] ${message}"
+  else
+    echo "[${level}] ${message}"
+  fi
+}
+
+# Validate fail2ban configuration settings
+validate_fail2ban_config() {
+  # Validate fail2ban log level
+  case "${FAIL2BAN_LOG_LEVEL}" in
+    "CRITICAL"|"ERROR"|"WARNING"|"NOTICE"|"INFO"|"DEBUG")
+      # Valid log level
+      ;;
+    *)
+      log_message "WARNING" "Invalid FAIL2BAN_LOG_LEVEL: ${FAIL2BAN_LOG_LEVEL}. Using default: INFO"
+      FAIL2BAN_LOG_LEVEL="INFO"
+      ;;
+  esac
+
+  # Validate fail2ban log type
+  case "${FAIL2BAN_LOG_TYPE}" in
+    "FILE"|"STDOUT"|"SYSLOG")
+      # Valid log type
+      ;;
+    *)
+      log_message "WARNING" "Invalid FAIL2BAN_LOG_TYPE: ${FAIL2BAN_LOG_TYPE}. Using default: FILE"
+      FAIL2BAN_LOG_TYPE="FILE"
+      ;;
+  esac
+
+  # Validate fail2ban DB type
+  case "${FAIL2BAN_DB_TYPE}" in
+    "MEMORY"|"FILE")
+      # Valid DB type
+      ;;
+    *)
+      log_message "WARNING" "Invalid FAIL2BAN_DB_TYPE: ${FAIL2BAN_DB_TYPE}. Using default: MEMORY"
+      FAIL2BAN_DB_TYPE="MEMORY"
+      ;;
+  esac
+
+  # Validate numeric values
+  if ! [[ "${FAIL2BAN_MAX_RETRY}" =~ ^[0-9]+$ ]]; then
+    log_message "WARNING" "Invalid FAIL2BAN_MAX_RETRY: ${FAIL2BAN_MAX_RETRY}. Using default: 5"
+    FAIL2BAN_MAX_RETRY="5"
+  fi
+
+  if ! [[ "${FAIL2BAN_STARTUP_DELAY}" =~ ^[0-9]+$ ]]; then
+    log_message "WARNING" "Invalid FAIL2BAN_STARTUP_DELAY: ${FAIL2BAN_STARTUP_DELAY}. Using default: 15"
+    FAIL2BAN_STARTUP_DELAY="15"
+  fi
+
+  if ! [[ "${FAIL2BAN_DB_PURGE_AGE}" =~ ^[0-9]+$ ]]; then
+    log_message "WARNING" "Invalid FAIL2BAN_DB_PURGE_AGE: ${FAIL2BAN_DB_PURGE_AGE}. Using default: 86400"
+    FAIL2BAN_DB_PURGE_AGE="86400"
+  fi
+
+  # Validate boolean values
+  if [[ "${FAIL2BAN_IGNORE_SELF}" != "TRUE" ]] && [[ "${FAIL2BAN_IGNORE_SELF}" != "FALSE" ]]; then
+    log_message "WARNING" "Invalid FAIL2BAN_IGNORE_SELF: ${FAIL2BAN_IGNORE_SELF}. Using default: TRUE"
+    FAIL2BAN_IGNORE_SELF="TRUE"
+  fi
+
+  return 0
+}
+
+# Ensure required directories exist
+ensure_directories() {
+  # If fail2ban is enabled, ensure its directories exist
+  if [[ "${CONTAINER_ENABLE_FAIL2BAN:-FALSE}" == "TRUE" ]]; then
+    # Check config directory
+    if [[ ! -d "${FAIL2BAN_CONFIG_PATH}" ]]; then
+      log_message "INFO" "Creating Fail2Ban config directory: ${FAIL2BAN_CONFIG_PATH}"
+      mkdir -p "${FAIL2BAN_CONFIG_PATH}" || {
+        log_message "ERROR" "Failed to create Fail2Ban config directory: ${FAIL2BAN_CONFIG_PATH}"
+        return 1
+      }
+    fi
+
+    # Check log directory
+    if [[ "${FAIL2BAN_LOG_TYPE}" == "FILE" ]] && [[ ! -d "${FAIL2BAN_LOG_PATH}" ]]; then
+      log_message "INFO" "Creating Fail2Ban log directory: ${FAIL2BAN_LOG_PATH}"
+      mkdir -p "${FAIL2BAN_LOG_PATH}" || {
+        log_message "ERROR" "Failed to create Fail2Ban log directory: ${FAIL2BAN_LOG_PATH}"
+        return 1
+      }
+    fi
+
+    # Check DB directory if using file-based DB
+    if [[ "${FAIL2BAN_DB_TYPE}" == "FILE" ]] && [[ ! -d "${FAIL2BAN_DB_PATH}" ]]; then
+      log_message "INFO" "Creating Fail2Ban database directory: ${FAIL2BAN_DB_PATH}"
+      mkdir -p "${FAIL2BAN_DB_PATH}" || {
+        log_message "ERROR" "Failed to create Fail2Ban database directory: ${FAIL2BAN_DB_PATH}"
+        return 1
+      }
+    fi
+  fi
+
+  # If firewall is enabled, ensure its directories exist
+  if [[ "${CONTAINER_ENABLE_FIREWALL:-FALSE}" == "TRUE" ]]; then
+    if [[ ! -d "${IPTABLES_RULES_PATH}" ]]; then
+      log_message "INFO" "Creating IPTables rules directory: ${IPTABLES_RULES_PATH}"
+      mkdir -p "${IPTABLES_RULES_PATH}" || {
+        log_message "ERROR" "Failed to create IPTables rules directory: ${IPTABLES_RULES_PATH}"
+        return 1
+      }
+    fi
+  fi
+
+  return 0
+}
+
+#--------------------------------------------------
+# Main Execution
+#--------------------------------------------------
+# Validate fail2ban configuration if enabled
+if [[ "${CONTAINER_ENABLE_FAIL2BAN:-FALSE}" == "TRUE" ]]; then
+  validate_fail2ban_config || {
+    log_message "ERROR" "Failed to validate Fail2Ban configuration"
+    exit 1
+  }
+fi
+
+# Ensure required directories exist
+ensure_directories || {
+  log_message "ERROR" "Failed to ensure required directories exist"
+  exit 1
+}
+
+# Output debug information if enabled
+if [[ "${DEBUG_MODE:-FALSE}" == "TRUE" ]]; then
+  log_message "DEBUG" "Firewall configuration loaded:"
+
+  if [[ "${CONTAINER_ENABLE_FIREWALL:-FALSE}" == "TRUE" ]]; then
+    log_message "DEBUG" "IPTables enabled with rules at: ${IPTABLES_RULES_PATH}${IPTABLES_RULES_FILE}"
+  else
+    log_message "DEBUG" "IPTables firewall is disabled"
+  fi
+
+  if [[ "${CONTAINER_ENABLE_FAIL2BAN:-FALSE}" == "TRUE" ]]; then
+    log_message "DEBUG" "Fail2Ban enabled with settings:"
+    log_message "DEBUG" "  FAIL2BAN_BACKEND=${FAIL2BAN_BACKEND}"
+    log_message "DEBUG" "  FAIL2BAN_MAX_RETRY=${FAIL2BAN_MAX_RETRY}"
+    log_message "DEBUG" "  FAIL2BAN_TIME_BAN=${FAIL2BAN_TIME_BAN}"
+    log_message "DEBUG" "  FAIL2BAN_TIME_FIND=${FAIL2BAN_TIME_FIND}"
+    log_message "DEBUG" "  FAIL2BAN_DB_TYPE=${FAIL2BAN_DB_TYPE}"
+  else
+    log_message "DEBUG" "Fail2Ban is disabled"
+  fi
+fi
+
+# Export all variables to make them available to child processes
+export IPTABLES_RULES_PATH
+export IPTABLES_RULES_FILE
+export FAIL2BAN_BACKEND
+export FAIL2BAN_CONFIG_PATH
+export FAIL2BAN_DB_FILE
+export FAIL2BAN_DB_PATH
+export FAIL2BAN_DB_PURGE_AGE
+export FAIL2BAN_DB_TYPE
+export FAIL2BAN_IGNORE_IP
+export FAIL2BAN_IGNORE_SELF
+export FAIL2BAN_LOG_PATH
+export FAIL2BAN_LOG_FILE
+export FAIL2BAN_LOG_LEVEL
+export FAIL2BAN_LOG_TYPE
+export FAIL2BAN_MAX_RETRY
+export FAIL2BAN_STARTUP_DELAY
+export FAIL2BAN_TIME_BAN
+export FAIL2BAN_TIME_FIND
+export FAIL2BAN_USE_DNS
+
+log_message "DEBUG" "Firewall defaults loaded successfully"

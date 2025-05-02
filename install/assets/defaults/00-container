@@ -1,0 +1,183 @@
+#!/command/with-contenv bash
+#
+# Container defaults configuration file
+# Sets default environment variables for container runtime configuration
+# Used by s6-overlay during container initialization
+#
+
+set -euo pipefail
+IFS=$'\n\t'
+
+#--------------------------------------------------
+# Configuration
+#--------------------------------------------------
+# Container identification
+CONTAINER_NAME=${CONTAINER_NAME:-"$(hostname)"}
+
+# Custom paths
+CONTAINER_CUSTOM_PATH=${CONTAINER_CUSTOM_PATH:-"/assets/custom/"}
+CONTAINER_CUSTOM_SCRIPTS_PATH=${CONTAINER_CUSTOM_SCRIPTS_PATH:-"/assets/custom-scripts/"}
+
+# Feature toggles
+CONTAINER_ENABLE_CUSTOM_BASH_PROMPT=${CONTAINER_ENABLE_CUSTOM_BASH_PROMPT:-"TRUE"}
+CONTAINER_ENABLE_DOCKER_SECRETS=${CONTAINER_ENABLE_DOCKER_SECRETS:-"TRUE"}
+CONTAINER_ENABLE_FAIL2BAN=${CONTAINER_ENABLE_FAIL2BAN:-"FALSE"}
+CONTAINER_ENABLE_FIREWALL=${CONTAINER_ENABLE_FIREWALL:-"FALSE"}
+CONTAINER_ENABLE_LOGROTATE=${CONTAINER_ENABLE_LOGROTATE:-"TRUE"}
+CONTAINER_ENABLE_LOGSHIPPING=${CONTAINER_ENABLE_LOGSHIPPING:-"FALSE"}
+CONTAINER_ENABLE_LOG_PREFIX=${CONTAINER_ENABLE_LOG_PREFIX:-"TRUE"}
+CONTAINER_ENABLE_MESSAGING=${CONTAINER_ENABLE_MESSAGING:-"TRUE"}
+CONTAINER_ENABLE_MONITORING=${CONTAINER_ENABLE_MONITORING:-"TRUE"}
+CONTAINER_ENABLE_PERMISSIONS=${CONTAINER_ENABLE_PERMISSIONS:-"TRUE"}
+CONTAINER_ENABLE_PROCESS_COUNTER=${CONTAINER_ENABLE_PROCESS_COUNTER:-"TRUE"}
+CONTAINER_ENABLE_PROCESS_HELPER=${CONTAINER_ENABLE_PROCESS_HELPER:-"TRUE"}
+CONTAINER_ENABLE_SCHEDULING=${CONTAINER_ENABLE_SCHEDULING:-"TRUE"}
+
+# Service backend configurations
+CONTAINER_FIREWALL_BACKEND=${CONTAINER_FIREWALL_BACKEND:-"iptables"}
+CONTAINER_LOGSHIPPING_BACKEND=${CONTAINER_LOGSHIPPING_BACKEND:-"fluent-bit"}
+CONTAINER_MESSAGING_BACKEND=${CONTAINER_MESSAGING_BACKEND:-"msmtp"}
+CONTAINER_MONITORING_BACKEND=${CONTAINER_MONITORING_BACKEND:-"zabbix"}
+CONTAINER_SCHEDULING_BACKEND=${CONTAINER_SCHEDULING_BACKEND:-"cron"}
+CONTAINER_SCHEDULING_LOCATION=${CONTAINER_SCHEDULING_LOCATION:-"/assets/cron/"}
+
+# Logging configuration
+CONTAINER_LOG_LEVEL=${CONTAINER_LOG_LEVEL:-"NOTICE"}
+CONTAINER_LOG_PREFIX_DATE_FMT=${CONTAINER_LOG_PREFIX_DATE_FMT:-"%Y-%m-%d"}
+CONTAINER_LOG_PREFIX_SEPERATOR=${CONTAINER_LOG_PREFIX_SEPERATOR:-"."}
+CONTAINER_LOG_PREFIX_TIME_FMT=${CONTAINER_LOG_PREFIX_TIME_FMT:-"%H:%M:%S"}
+CONTAINER_LOG_FILE_NAME=${CONTAINER_LOG_FILE_NAME:-"container.log"}
+CONTAINER_LOG_FILE_LEVEL=${CONTAINER_LOG_FILE_LEVEL:-"DEBUG"}
+CONTAINER_LOG_FILE_PATH=${CONTAINER_LOG_FILE_PATH:-"/var/log/container/"}
+CONTAINER_LOG_FILE_PREFIX_DATE_FMT=${CONTAINER_LOG_FILE_PREFIX_DATE_FMT:-"%Y-%m-%d"}
+CONTAINER_LOG_FILE_PREFIX_SEPERATOR=${CONTAINER_LOG_FILE_PREFIX_SEPERATOR:-"."}
+CONTAINER_LOG_FILE_PREFIX_TIME_FMT=${CONTAINER_LOG_FILE_PREFIX_TIME_FMT:-"%H:%M:%S"}
+
+# Process helper configuration
+CONTAINER_PROCESS_HELPER_DATE_FMT=${CONTAINER_PROCESS_HELPER_DATE_FMT:-"%Y-%m-%d"}
+CONTAINER_PROCESS_HELPER_PATH=${CONTAINER_PROCESS_HELPER_PATH:-"/assets/container/processhelper/"}
+CONTAINER_PROCESS_HELPER_SCRIPT=${CONTAINER_PROCESS_HELPER_SCRIPT:-"processhelper.sh"}
+CONTAINER_PROCESS_HELPER_TIME_FMT=${CONTAINER_PROCESS_HELPER_TIME_FMT:-"%H:%M:%S"}
+
+# Process runaway protection
+CONTAINER_PROCESS_RUNAWAY_PROTECTOR=${CONTAINER_PROCESS_RUNAWAY_PROTECTOR:-"TRUE"}
+CONTAINER_PROCESS_RUNAWAY_DELAY=${CONTAINER_PROCESS_RUNAWAY_DELAY:-"1"}
+CONTAINER_PROCESS_RUNAWAY_LIMIT=${CONTAINER_PROCESS_RUNAWAY_LIMIT:-"50"}
+CONTAINER_PROCESS_RUNAWAY_SHOW_OUTPUT_FINAL=${CONTAINER_PROCESS_RUNAWAY_SHOW_OUTPUT_FINAL:-"TRUE"}
+
+# Global settings
+CONTAINER_SKIP_SANITY_CHECK=${CONTAINER_SKIP_SANITY_CHECK:-"FALSE"}
+DEBUG_MODE=${DEBUG_MODE:-"FALSE"}
+PROCESS_NAME=${PROCESS_NAME:-"container"}
+
+# Get script path using safer approach
+SCRIPTPATH="$(cd "$(dirname "$0")" >/dev/null 2>&1 || exit 1; pwd -P)"
+
+#--------------------------------------------------
+# Helper Functions
+#--------------------------------------------------
+# Log a message to stdout with appropriate formatting
+log_message() {
+  local level="$1"
+  local message="$2"
+
+  if [[ "${CONTAINER_ENABLE_LOG_PREFIX}" == "TRUE" ]]; then
+    local datestr
+    datestr=$(date +"${CONTAINER_LOG_PREFIX_DATE_FMT}")
+    local timestr
+    timestr=$(date +"${CONTAINER_LOG_PREFIX_TIME_FMT}")
+    echo "[${datestr}${CONTAINER_LOG_PREFIX_SEPERATOR}${timestr}] [${level}] ${message}"
+  else
+    echo "[${level}] ${message}"
+  fi
+}
+
+# Validate required directories exist and are accessible
+validate_directories() {
+  # Check if log directory exists, create if not
+  if [[ ! -d "${CONTAINER_LOG_FILE_PATH}" ]]; then
+    mkdir -p "${CONTAINER_LOG_FILE_PATH}" || {
+      log_message "ERROR" "Failed to create log directory: ${CONTAINER_LOG_FILE_PATH}"
+      return 1
+    }
+  fi
+
+  # Check process helper path exists if enabled
+  if [[ "${CONTAINER_ENABLE_PROCESS_HELPER}" == "TRUE" ]] && [[ ! -d "${CONTAINER_PROCESS_HELPER_PATH}" ]]; then
+    log_message "WARNING" "Process helper is enabled but path does not exist: ${CONTAINER_PROCESS_HELPER_PATH}"
+  fi
+
+  return 0
+}
+
+#--------------------------------------------------
+# Main Execution
+#--------------------------------------------------
+# Perform sanity check if not explicitly disabled
+if [[ "${CONTAINER_SKIP_SANITY_CHECK}" != "TRUE" ]]; then
+  validate_directories || exit 1
+
+  # Check for critical helper scripts
+  if [[ "${CONTAINER_ENABLE_PROCESS_HELPER}" == "TRUE" ]]; then
+    helper_script="${CONTAINER_PROCESS_HELPER_PATH}${CONTAINER_PROCESS_HELPER_SCRIPT}"
+    if [[ ! -f "${helper_script}" ]]; then
+      log_message "WARNING" "Process helper script not found: ${helper_script}"
+    elif [[ ! -x "${helper_script}" ]]; then
+      log_message "WARNING" "Process helper script not executable: ${helper_script}"
+    fi
+  fi
+fi
+
+# Output debug information if enabled
+if [[ "${DEBUG_MODE}" == "TRUE" ]]; then
+  log_message "DEBUG" "Container defaults initialized with the following configuration:"
+  env | grep -E "^(CONTAINER_|PROCESS_|DEBUG_)" | sort
+fi
+
+# Export all variables to make them available to child processes
+export CONTAINER_CUSTOM_PATH
+export CONTAINER_CUSTOM_SCRIPTS_PATH
+export CONTAINER_ENABLE_CUSTOM_BASH_PROMPT
+export CONTAINER_ENABLE_DOCKER_SECRETS
+export CONTAINER_ENABLE_FAIL2BAN
+export CONTAINER_ENABLE_FIREWALL
+export CONTAINER_ENABLE_LOGROTATE
+export CONTAINER_ENABLE_LOGSHIPPING
+export CONTAINER_ENABLE_LOG_PREFIX
+export CONTAINER_ENABLE_MESSAGING
+export CONTAINER_ENABLE_MONITORING
+export CONTAINER_ENABLE_PERMISSIONS
+export CONTAINER_ENABLE_PROCESS_COUNTER
+export CONTAINER_ENABLE_PROCESS_HELPER
+export CONTAINER_ENABLE_SCHEDULING
+export CONTAINER_FIREWALL_BACKEND
+export CONTAINER_LOGSHIPPING_BACKEND
+export CONTAINER_LOG_LEVEL
+export CONTAINER_LOG_PREFIX_DATE_FMT
+export CONTAINER_LOG_PREFIX_SEPERATOR
+export CONTAINER_LOG_PREFIX_TIME_FMT
+export CONTAINER_LOG_FILE_NAME
+export CONTAINER_LOG_FILE_LEVEL
+export CONTAINER_LOG_FILE_PATH
+export CONTAINER_LOG_FILE_PREFIX_DATE_FMT
+export CONTAINER_LOG_FILE_PREFIX_SEPERATOR
+export CONTAINER_LOG_FILE_PREFIX_TIME_FMT
+export CONTAINER_MESSAGING_BACKEND
+export CONTAINER_MONITORING_BACKEND
+export CONTAINER_NAME
+export CONTAINER_PROCESS_HELPER_DATE_FMT
+export CONTAINER_PROCESS_HELPER_PATH
+export CONTAINER_PROCESS_HELPER_SCRIPT
+export CONTAINER_PROCESS_HELPER_TIME_FMT
+export CONTAINER_PROCESS_RUNAWAY_PROTECTOR
+export CONTAINER_PROCESS_RUNAWAY_DELAY
+export CONTAINER_PROCESS_RUNAWAY_LIMIT
+export CONTAINER_PROCESS_RUNAWAY_SHOW_OUTPUT_FINAL
+export CONTAINER_SCHEDULING_BACKEND
+export CONTAINER_SCHEDULING_LOCATION
+export CONTAINER_SKIP_SANITY_CHECK
+export DEBUG_MODE
+export PROCESS_NAME
+export SCRIPTPATH
+
+log_message "NOTICE" "Container defaults loaded successfully"
