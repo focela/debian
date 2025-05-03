@@ -1,0 +1,69 @@
+# .dockerignore file
+# Specifies files and directories to exclude from Docker build context
+# This reduces build context size and prevents unnecessary cache invalidation
+
+#--------------------------------------------------
+# SOURCE CONTROL & EDITOR FILES
+#--------------------------------------------------
+# Version control system files - never needed in image
+.git/
+.github/
+.gitignore
+
+# Editor settings and temporary files
+*.swn
+*.swo
+*.swp
+*~
+.idea/
+.vscode/
+
+#--------------------------------------------------
+# OPERATING SYSTEM FILES
+#--------------------------------------------------
+# Hidden OS files that provide no value to the image
+.DS_Store
+Thumbs.db
+
+#--------------------------------------------------
+# DOCUMENTATION & METADATA
+#--------------------------------------------------
+# Documentation files not needed at runtime
+CHANGELOG.md
+docs/
+LICENSE
+LICENSES/
+README.md
+
+#--------------------------------------------------
+# DEVELOPMENT & TESTING
+#--------------------------------------------------
+# Build artifacts and test directories
+.cache/
+build/
+dist/
+example/
+examples/
+test/
+tests/
+tmp/
+
+# Development configuration files
+.env
+compose.yaml
+docker-compose.yml
+Makefile
+zabbix_templates/
+
+#--------------------------------------------------
+# TEMPORARY & BACKUP FILES
+#--------------------------------------------------
+# Generic temporary and backup files
+*.bak
+*.tmp
+
+# Specific asset backups
+install/assets/**/*.bak
+install/assets/**/*.tmp
+install/etc/**/*.bak
+install/etc/**/*.tmp
