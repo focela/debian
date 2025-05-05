@@ -1,0 +1,12 @@
+#!/command/with-contenv bash
+# Purpose: Sets debugging options for container permissions
+# These defaults can be overridden by setting the environment variables externally
+
+set -euo pipefail
+IFS=$'\n\t'
+
+#--------------------------------------------------
+# Configuration
+#--------------------------------------------------
+# Debug settings
+DEBUG_PERMISSIONS=${DEBUG_PERMISSIONS:-"FALSE"}
