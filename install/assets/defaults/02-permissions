@@ -1,0 +1,16 @@
+#!/command/with-contenv bash
+#--------------------------------------------------
+# Script: 02-permissions
+# Description: Configures debugging settings for permission operations in the container.
+#--------------------------------------------------
+
+# Enable strict mode
+set -euo pipefail
+IFS=$'\n\t'
+
+#--------------------------------------------------
+# Configuration
+#--------------------------------------------------
+
+# Debugging toggle
+DEBUG_PERMISSIONS=${DEBUG_PERMISSIONS:-"FALSE"}
