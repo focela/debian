@@ -1,0 +1,14 @@
+#!/command/with-contenv bash
+# Container Permissions Debugging Configuration
+#
+# This script configures debugging options for the permissions system.
+# It's part of the container initialization sequence.
+
+# Enable strict error handling
+set -eo pipefail
+
+# -----------------------------------------------------------------------------
+# PERMISSIONS DEBUG CONFIGURATION
+# -----------------------------------------------------------------------------
+# Controls whether detailed permission operation logs are displayed
+DEBUG_PERMISSIONS=${DEBUG_PERMISSIONS:-"FALSE"}

@@ -1,0 +1,16 @@
+#!/command/with-contenv bash
+# Container Scheduling Configuration
+#
+# This script configures the scheduling system with default settings.
+# It sets up logging preferences for scheduled tasks.
+
+# Enable strict error handling
+set -eo pipefail
+
+# -----------------------------------------------------------------------------
+# SCHEDULING LOGGING CONFIGURATION
+# -----------------------------------------------------------------------------
+# Settings for how scheduled task logs are handled
+SCHEDULING_LOG_TYPE=${SCHEDULING_LOG_TYPE:-"FILE"}
+SCHEDULING_LOG_LOCATION=${SCHEDULING_LOG_LOCATION:-"/var/log/cron/"}
+SCHEDULING_LOG_LEVEL=${SCHEDULING_LOG_LEVEL:-"8"}
