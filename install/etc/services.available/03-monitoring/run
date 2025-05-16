@@ -1,0 +1,114 @@
+#!/command/with-contenv bash
+#----------------------------------------------------------------------
+# Zabbix Agent Service Runner
+#
+# Purpose: S6 service script that initializes and runs the Zabbix agent
+# monitoring service. Handles agent type selection, auto-registration
+# configuration, and proper permissions.
+#----------------------------------------------------------------------
+
+# Enable strict error handling
+set -euo pipefail
+
+#----------------------------------------------------------------------
+# CONFIGURATION
+#----------------------------------------------------------------------
+# Source container functions library and prepare environment
+source /assets/functions/00-container
+PROCESS_NAME="monitoring"
+output_off
+prepare_service defaults single
+
+# Wait for container initialization to complete
+check_container_initialized
+check_service_initialized init
+liftoff
+
+#----------------------------------------------------------------------
+# MAIN EXECUTION
+#----------------------------------------------------------------------
+# Process based on configured monitoring backend
+case "${CONTAINER_MONITORING_BACKEND}" in
+  "zabbix" )
+    print_debug "Trying to execute Container Monitoring Backend Zabbix"
+
+    #----------------------------------------------------------------------
+    # ZABBIX AGENT TYPE SELECTION
+    #----------------------------------------------------------------------
+    # Determine which Zabbix agent binary to use based on configuration
+    case "${ZABBIX_AGENT_TYPE,,}" in
+      "1" | "c" | "classic" | "legacy" | "old" )
+        print_debug "Starting classic Zabbix Agent"
+        zabbix_command="zabbix_agentd"
+        zabbix_agent_type="classic"
+      ;;
+      "2" | "m" | "n" | "modern" | "new" )
+        print_debug "Starting modern Zabbix agent"
+        zabbix_command="zabbix_agent2"
+        zabbix_agent_type="modern"
+      ;;
+      * )
+        print_debug "No known Zabbix agent type selected"
+      ;;
+    esac
+
+    #----------------------------------------------------------------------
+    # ZABBIX AUTO-REGISTRATION CONFIGURATION
+    #----------------------------------------------------------------------
+    # Extract auto-registration tags from configuration files
+    print_debug "Zabbix Agent - Adding Autoregister Configuration '$(grep -h "# Autoregister=" "${ZABBIX_CONFIG_PATH}"/"${ZABBIX_CONFIG_FILE}".d/*.conf | cut -d = -f2 | xargs | tr " " ":" | sed 's/^/:/' | sed 's/$/:/')'"
+
+    # Remove any existing HostMetadata entries
+    sed -i "/HostMetadata/d" "${ZABBIX_CONFIG_PATH}"/"${ZABBIX_CONFIG_FILE}"
+
+    # Add auto-registration metadata if enabled
+    if var_true "${ZABBIX_ENABLE_AUTOREGISTER}" ; then
+      print_debug "Zabbix Agent - Enabling Auto Register"
+
+      # Add HostMetadata line with auto-register tags before the Include line
+      sed -i "/^Include=.*/i HostMetadata=$(grep -h "# Autoregister=" "${ZABBIX_CONFIG_PATH}"/"${ZABBIX_CONFIG_FILE}".d/*.conf | cut -d = -f2 | xargs | tr " " ":" | sed 's/^/:/' | sed 's/$/:/')" "${ZABBIX_CONFIG_PATH}"/"${ZABBIX_CONFIG_FILE}"
+
+      # Add DNS-based auto-registration if enabled
+      if var_true "${ZABBIX_ENABLE_AUTOREGISTER_DNS}" ; then
+        print_debug "Zabbix Agent - Enabling Auto Register by DNS"
+
+        # Use custom DNS name if provided, otherwise construct from hostname and suffix
+        if [ -n "${ZABBIX_AUTOREGISTER_DNS_NAME}" ] ; then
+          print_debug "Zabbix Autoregsiter DNS: Using ${ZABBIX_AUTOREGISTER_DNS_NAME} as hostname"
+        else
+          ZABBIX_AUTOREGISTER_DNS_NAME="${ZABBIX_HOSTNAME}${ZABBIX_AUTOREGISTER_SUFFIX}"
+        fi
+
+        # Update configuration with DNS interface
+        sed -i "/HostInterface=.*/d" "${ZABBIX_CONFIG_PATH}"/"${ZABBIX_CONFIG_FILE}"
+        sed -i "/^Include=.*/i HostInterface=${ZABBIX_AUTOREGISTER_DNS_NAME}" "${ZABBIX_CONFIG_PATH}"/"${ZABBIX_CONFIG_FILE}"
+      fi
+    fi
+
+    #----------------------------------------------------------------------
+    # PERMISSIONS AND FINAL SETUP
+    #----------------------------------------------------------------------
+    # Set proper ownership and permissions on configuration
+    chown -R "${ZABBIX_USER}":root "${ZABBIX_CONFIG_PATH}"
+    chmod -R 0755 "${ZABBIX_CONFIG_PATH}"
+
+    # Handle fail2ban integration if both firewall and fail2ban are enabled
+    if var_true "${CONTAINER_ENABLE_FIREWALL}" && var_true "${CONTAINER_ENABLE_FAIL2BAN}" ; then
+      # Wait for fail2ban socket to be available
+      while [ ! -S "/var/run/fail2ban/fail2ban.sock" ] ; do
+        sleep 1
+      done
+
+      # Grant the fail2ban group access to its socket
+      setfacl -m g:fail2ban:rwx /var/run/fail2ban/fail2ban.sock
+    fi
+
+    #----------------------------------------------------------------------
+    # ZABBIX AGENT EXECUTION
+    #----------------------------------------------------------------------
+    # Start the appropriate Zabbix agent as the zabbix user
+    print_start "Starting Zabbix Agent (${zabbix_agent_type}) ${ZABBIX_VERSION}"
+    output_on
+    silent exec s6-setuidgid "${ZABBIX_USER}" ${zabbix_command} -c "${ZABBIX_CONFIG_PATH}"/"${ZABBIX_CONFIG_FILE}" -f
+  ;;
+esac
