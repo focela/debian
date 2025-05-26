@@ -1,0 +1,23 @@
+---
+name: Feature Request
+about: Suggest a new feature or improvement for this image
+title: "[Feature] "
+labels: [enhancement]
+assignees: []
+---
+
+## Description
+A clear and concise description of the feature you’d like to see added.
+
+## Use Case
+What’s the problem this feature would solve or improve?
+
+## Proposed Solution
+How would you like to see it implemented?
+
+## Environment (if relevant)
+- **Image version**: e.g. `7.10.31`
+- **Use case context**: e.g. running on Kubernetes, CI/CD, edge device
+
+## Additional Context
+Add any mockups, references, or links that support your request.
