@@ -1,0 +1,118 @@
+#!/command/with-contenv bash
+#----------------------------------------------------------------------
+# Logging Configuration - Fluent Bit and Logrotate
+#
+# Purpose: Configure log shipping and rotation settings for the container.
+# This script sets defaults for Fluent Bit (log forwarding) and logrotate
+# (log file management) to handle container logs efficiently.
+#
+# Note: This works with the CONTAINER_LOGSHIPPING_BACKEND setting.
+# All variables can be overridden at container runtime using the
+# ${VAR:-"default"} pattern for s6-overlay compatibility.
+#----------------------------------------------------------------------
+
+#----------------------------------------------------------------------
+# FLUENT BIT GENERAL CONFIGURATION
+#----------------------------------------------------------------------
+# Core settings
+FLUENTBIT_MODE=${FLUENTBIT_MODE:-"NORMAL"}
+FLUENTBIT_SETUP_TYPE=${FLUENTBIT_SETUP_TYPE:-"AUTO"}
+FLUENTBIT_LOG_LEVEL=${FLUENTBIT_LOG_LEVEL:-"info"}
+
+# Configuration files
+FLUENTBIT_CONFIG_PARSERS=${FLUENTBIT_CONFIG_PARSERS:-"parsers.conf"}
+FLUENTBIT_CONFIG_PLUGINS=${FLUENTBIT_CONFIG_PLUGINS:-"plugins.conf"}
+
+# Log file settings
+FLUENTBIT_LOG_FILE=${FLUENTBIT_LOG_FILE:-"fluentbit.log"}
+FLUENTBIT_LOG_PATH=${FLUENTBIT_LOG_PATH:-"/var/log/fluentbit/"}
+
+# Performance tuning
+FLUENTBIT_FLUSH_SECONDS=${FLUENTBIT_FLUSH_SECONDS:-"1"}
+FLUENTBIT_GRACE_SECONDS=${FLUENTBIT_GRACE_SECONDS:-"1"}
+
+#----------------------------------------------------------------------
+# FLUENT BIT HTTP SERVER
+#----------------------------------------------------------------------
+# HTTP monitoring endpoint
+FLUENTBIT_ENABLE_HTTP_SERVER=${FLUENTBIT_ENABLE_HTTP_SERVER:-"TRUE"}
+FLUENTBIT_HTTP_LISTEN_IP=${FLUENTBIT_HTTP_LISTEN_IP:-"0.0.0.0"}
+FLUENTBIT_HTTP_LISTEN_PORT=${FLUENTBIT_HTTP_LISTEN_PORT:-"2020"}
+
+#----------------------------------------------------------------------
+# FLUENT BIT STORAGE
+#----------------------------------------------------------------------
+# Storage metrics and buffering
+FLUENTBIT_ENABLE_STORAGE_METRICS=${FLUENTBIT_ENABLE_STORAGE_METRICS:-"TRUE"}
+FLUENTBIT_STORAGE_PATH=${FLUENTBIT_STORAGE_PATH:-"/tmp/fluentbit/storage"}
+FLUENTBIT_STORAGE_BACKLOG_LIMIT=${FLUENTBIT_STORAGE_BACKLOG_LIMIT:-"5M"}
+FLUENTBIT_STORAGE_CHECKSUM=${FLUENTBIT_STORAGE_CHECKSUM:-"FALSE"}
+FLUENTBIT_STORAGE_SYNC=${FLUENTBIT_STORAGE_SYNC:-"normal"}
+
+#----------------------------------------------------------------------
+# FLUENT BIT OUTPUT CONFIGURATION
+#----------------------------------------------------------------------
+# Output type selection
+FLUENTBIT_OUTPUT=${FLUENTBIT_OUTPUT:-"FORWARD"}
+
+# Forward output settings (default output)
+FLUENTBIT_FORWARD_PORT=${FLUENTBIT_FORWARD_PORT:-"24224"}
+FLUENTBIT_FORWARD_BUFFER_CHUNK_SIZE=${FLUENTBIT_FORWARD_BUFFER_CHUNK_SIZE:-"1M"}
+FLUENTBIT_FORWARD_BUFFER_MAX_SIZE=${FLUENTBIT_FORWARD_BUFFER_MAX_SIZE:-"6M"}
+FLUENTBIT_OUTPUT_FORWARD_HOST=${FLUENTBIT_OUTPUT_FORWARD_HOST:-"fluent-proxy"}
+FLUENTBIT_OUTPUT_FORWARD_TLS=${FLUENTBIT_OUTPUT_FORWARD_TLS:-"FALSE"}
+FLUENTBIT_OUTPUT_FORWARD_TLS_VERIFY=${FLUENTBIT_OUTPUT_FORWARD_TLS_VERIFY:-"FALSE"}
+
+# Loki output settings (alternative output)
+FLUENTBIT_OUTPUT_LOKI_HOST=${FLUENTBIT_OUTPUT_LOKI_HOST:-"loki"}
+FLUENTBIT_OUTPUT_LOKI_PORT=${FLUENTBIT_OUTPUT_LOKI_PORT:-"3100"}
+FLUENTBIT_OUTPUT_LOKI_COMPRESS_GZIP=${FLUENTBIT_OUTPUT_LOKI_COMPRESS_GZIP:-"gzip"}
+FLUENTBIT_OUTPUT_LOKI_TLS=${FLUENTBIT_OUTPUT_LOKI_TLS:-"FALSE"}
+FLUENTBIT_OUTPUT_LOKI_TLS_VERIFY=${FLUENTBIT_OUTPUT_LOKI_TLS_VERIFY:-"FALSE"}
+
+#----------------------------------------------------------------------
+# FLUENT BIT TAIL INPUT
+#----------------------------------------------------------------------
+# File reading behavior
+FLUENTBIT_TAIL_READ_FROM_HEAD=${FLUENTBIT_TAIL_READ_FROM_HEAD:-"FALSE"}
+FLUENTBIT_TAIL_SKIP_EMPTY_LINES=${FLUENTBIT_TAIL_SKIP_EMPTY_LINES:-"TRUE"}
+FLUENTBIT_TAIL_SKIP_LONG_LINES=${FLUENTBIT_TAIL_SKIP_LONG_LINES:-"TRUE"}
+
+# Buffer configuration
+FLUENTBIT_TAIL_BUFFER_CHUNK_SIZE=${FLUENTBIT_TAIL_BUFFER_CHUNK_SIZE:-"32k"}
+FLUENTBIT_TAIL_BUFFER_MAX_SIZE=${FLUENTBIT_TAIL_BUFFER_MAX_SIZE:-"32k"}
+
+# Database settings for tracking file positions
+FLUENTBIT_TAIL_DB_ENABLE=${FLUENTBIT_TAIL_DB_ENABLE:-"TRUE"}
+FLUENTBIT_TAIL_DB_SYNC=${FLUENTBIT_TAIL_DB_SYNC:-"normal"}
+FLUENTBIT_TAIL_DB_LOCK=${FLUENTBIT_TAIL_DB_LOCK:-"TRUE"}
+FLUENTBIT_TAIL_DB_JOURNAL_MODE=${FLUENTBIT_TAIL_DB_JOURNAL_MODE:-"WAL"}
+
+# Metadata keys for log entries
+FLUENTBIT_TAIL_KEY_PATH_ENABLE=${FLUENTBIT_TAIL_KEY_PATH_ENABLE:-"TRUE"}
+FLUENTBIT_TAIL_KEY_PATH=${FLUENTBIT_TAIL_KEY_PATH:-"filename"}
+FLUENTBIT_TAIL_KEY_OFFSET_ENABLE=${FLUENTBIT_TAIL_KEY_OFFSET_ENABLE:-"FALSE"}
+FLUENTBIT_TAIL_KEY_OFFSET=${FLUENTBIT_TAIL_KEY_OFFSET:-"offset"}
+
+#----------------------------------------------------------------------
+# LOGROTATE CONFIGURATION
+#----------------------------------------------------------------------
+# OS-specific compression type detection
+# Older Alpine versions (3.5, 3.8) don't support zstd compression
+case "$(cat /etc/os-release | grep VERSION_ID | cut -d = -f 2 | cut -d . -f 1,2)" in
+  "3.5" | "3.8" )
+    LOGROTATE_COMPRESSION_TYPE="gzip"
+    ;;
+  *)
+    LOGROTATE_COMPRESSION_TYPE=${LOGROTATE_COMPRESSION_TYPE:-"zstd"}
+    ;;
+esac
+
+# Compression level (1-9, higher = better compression)
+LOGROTATE_COMPRESSION_VALUE=${LOGROTATE_COMPRESSION_VALUE:-"8"}
+
+# Log retention period
+LOGROTATE_RETAIN_DAYS=${LOGROTATE_RETAIN_DAYS:-"7"}
+
+# Auto-configure logrotate when log shipping is enabled
+LOGSHIPPING_AUTO_CONFIG_LOGROTATE=${LOGSHIPPING_AUTO_CONFIG_LOGROTATE:-"TRUE"}
