@@ -1,0 +1,262 @@
+#!/command/with-contenv bash
+#----------------------------------------------------------------------
+# Container Startup Script (00-startup)
+#
+# Purpose: Initial container setup including permissions, logging,
+# restart detection, bash environment configuration, and version info.
+# This script runs early in the container initialization process and
+# sets up the foundation for all subsequent init scripts.
+#
+# Execution Order: This runs as 00-startup in cont-init.d
+# Dependencies: Requires /assets/functions/00-container
+#----------------------------------------------------------------------
+
+#----------------------------------------------------------------------
+# INITIAL SETUP
+#----------------------------------------------------------------------
+# Fix permissions for critical directories
+# Note: -f flag suppresses errors if files don't exist
+chmod -f -R 0755 /assets/{defaults,functions} > /dev/null 2>&1
+chmod -f -R 0755 /etc/{cont-init.d,cont-finish.d,services.available} > /dev/null 2>&1
+
+# Load container functions library
+source /assets/functions/00-container
+
+# Disable debug output for cleaner initialization
+output_off
+
+# Set process name for logging
+PROCESS_NAME="container-init"
+
+# Display container banner/version info
+showoff
+
+#----------------------------------------------------------------------
+# LOGGING SETUP
+#----------------------------------------------------------------------
+# Clean up OS logrotate directory to prevent conflicts
+rm -rf /etc/logrotate.d/*
+mkdir -p /assets/logrotate
+
+# Initialize container logging
+mkdir -p "${CONTAINER_LOG_FILE_PATH}"
+touch "${CONTAINER_LOG_FILE_PATH}"/"${CONTAINER_LOG_FILE_NAME}"
+echo "** Container Name: ${CONTAINER_NAME} - Commencing Logging" >> "${CONTAINER_LOG_FILE_PATH}"/"${CONTAINER_LOG_FILE_NAME}"
+
+# Create logrotate configuration for container logs
+create_logrotate container "${CONTAINER_LOG_FILE_PATH}"/"${CONTAINER_LOG_FILE_NAME}"
+
+#----------------------------------------------------------------------
+# CONTAINER RESTART DETECTION
+#----------------------------------------------------------------------
+# Check if /tmp/.container exists to detect warm restarts
+# This directory contains service state files that persist during container lifetime
+if [ -d "/tmp/.container" ] ; then
+  print_notice "Detected Container that has been restarted - Cleaning '/tmp/.container' files"
+  # Clean up previous state files
+  rm -rf /tmp/.container/*
+  # Remove all service definitions to force re-initialization
+  rm -rf /etc/services.d/*
+  # Log restart timestamp
+  echo "$(date +%s) $(date +'%Y-%m-%d %H:%M:%S %Z') - Warm restart detected" >> /tmp/.container/container-restart
+else
+  print_debug "Cold Container startup detected - Proceeding to initialize services normally"
+  # Create state directory for first run
+  mkdir -p /tmp/.container/
+  # Log initial startup timestamp
+  echo "$(date +%s) $(date +'%Y-%m-%d %H:%M:%S %Z') - Container started" >> /tmp/.container/container-startup
+fi
+
+#----------------------------------------------------------------------
+# BASH ENVIRONMENT CONFIGURATION
+#----------------------------------------------------------------------
+print_debug "Adding shortcuts to .bashrc"
+
+# Add container functions and aliases to root's bash environment
+cat <<EOF >> /root/.bashrc
+# Source container functions for interactive shells
+source /assets/functions/00-container
+
+# Show sorted environment variables with container context
+alias env='with-contenv env | sort'
+
+# Service management helper: disable s6 services
+# Usage: service_down <service_name|all>
+service_down() {
+    case "\${1}" in
+        all )
+            echo "** Disabling all services"
+            for service in /var/run/s6/legacy-services/* ; do
+                echo "** Disabling s6 service '\$(basename \${service})'"
+                s6-svc -d /var/run/s6/legacy-services/\$(basename \${service})
+            done
+        ;;
+        * )
+            if [ -d "/var/run/s6/legacy-services/\$1" ] ; then
+                echo "** Disabling s6 service '\$1'"
+                s6-svc -d /var/run/s6/legacy-services/\$1
+            fi
+        ;;
+    esac
+}
+
+# List all available s6 services
+service_list() {
+    ls -1 /var/run/s6/legacy-services
+}
+
+# Reset service state files (allows service to restart fresh)
+# Usage: service_reset <service_name|all>
+service_reset() {
+    case "\${1}" in
+        all )
+            echo "** Resetting all services"
+            for service in /var/run/s6/legacy-services/* ; do
+                echo "** Reset s6 service '\$(basename \${service})'"
+                rm -rf /tmp/.container/\$(basename \${service})
+                # Note: Service restart handled by s6 automatically
+            done
+        ;;
+        * )
+            if [ -d "/var/run/s6/legacy-services/\$1" ] ; then
+                echo "** Reset s6 service '\$1'"
+                rm -rf /tmp/.container/\$1
+            fi
+        ;;
+    esac
+}
+
+# Service management helper: enable s6 services
+# Usage: service_up <service_name|all>
+service_up() {
+    case "\${1}" in
+        all )
+            echo "** Enabling all services"
+            for service in /var/run/s6/legacy-services/* ; do
+                echo "** Enabling s6 service '\$(basename \${service})'"
+                s6-svc -u /var/run/s6/legacy-services/\$(basename \${service})
+            done
+        ;;
+        * )
+            if [ -d "/var/run/s6/legacy-services/\$1" ] ; then
+                echo "** Enabling s6 service '\$1'"
+                s6-svc -u /var/run/s6/legacy-services/\$1
+            fi
+        ;;
+    esac
+}
+
+EOF
+
+#----------------------------------------------------------------------
+# CHANGELOG VERSION DETECTION
+#----------------------------------------------------------------------
+# Determine which changelog file to use based on image name
+# Try multiple naming patterns to find the appropriate changelog
+if [ -f "/assets/.changelogs/${IMAGE_NAME/\//_}.md" ] ; then
+  changelogname="/assets/.changelogs/${IMAGE_NAME/\//_}.md"
+elif [ -f /assets/.changelogs/docker-${IMAGE_NAME/\//_}.md ] ; then
+  changelogname="/assets/.changelogs/docker-${IMAGE_NAME/\//_}.md"
+else
+  # Check for legacy focela naming
+  if [ -f /assets/.changelogs/focela_docker-${IMAGE_NAME/\//_}.md ] ; then
+    changelogname="/assets/.changelogs/focela_docker-${IMAGE_NAME/\//_}.md"
+  else
+    # Try stripping GitHub URL to find changelog
+    strip_image_repo_url=$(echo ${IMAGE_REPO_URL%/} | sed "s#https://github.com/##g")
+    if [ -f /assets/.changelogs/${strip_image_repo_url/\//_}.md ] ; then
+      changelogname="/assets/.changelogs/${strip_image_repo_url/\//_}.md"
+    fi
+  fi
+fi
+
+# Add image_version function if changelogs directory exists
+# This function lists all known base image versions
+if [ -d "/assets/.changelogs" ] ; then
+  cat <<EOF >> /root/.bashrc
+# Display versions of all base images
+image_version() {
+    for clname in /assets/.changelogs/* ; do
+        version=\$(head -n 1 \$clname | awk '{print \$2}')
+        echo "Image: \$(basename \$clname) \$version"
+    done
+}
+
+EOF
+fi
+
+# Add appropriate changelog command based on detection
+if [ -z "${changelogname// }" ] ; then
+  # No changelog found - add placeholder function
+  print_debug "Not adding 'changelog' command to .bashrc as I can't detect what changelog it is"
+  echo "image_changelog() { echo '** Sorry - I do not know what image this is. Check if there are changelogs in /assets/.changelogs';}" >> /root/.bashrc
+else
+  # Changelog found - add function to display recent changes
+  print_debug "Adding 'changelog' command to .bashrc"
+  cat <<EOF >> /root/.bashrc
+# Display most recent changelog entry for current image
+image_changelog() {
+    echo "** Showing the most recent version entry changelog for ${IMAGE_NAME} - See more at /assets/.changelogs"
+    # Extract content between first and second ## headers
+    awk '/^##/{p++} p==2{print; exit} p>=1' $changelogname | sed '\$d'
+}
+EOF
+fi
+
+#----------------------------------------------------------------------
+# BASH PROMPT CUSTOMIZATION
+#----------------------------------------------------------------------
+# Configure custom bash prompt
+if [ -n "${CONTAINER_CUSTOM_BASH_PROMPT}" ] ; then
+  # Use user-defined prompt if provided
+  bash_prompt=${CONTAINER_CUSTOM_BASH_PROMPT}
+else
+  # Build default prompt with image name and version
+  image_version=$(get_image_version)
+  if [ ! -z "${image_version// }" ] ; then
+    bash_ver=":${image_version}"
+  fi
+  # Format: [image_name:version time current_directory] $
+  bash_prompt="[${IMAGE_NAME}${bash_ver} \\t \\w] $ "
+fi
+
+# Export prompt (remove any double spaces)
+echo "export PS1=\"${bash_prompt/  /}\"" >> /root/.bashrc
+
+#----------------------------------------------------------------------
+# UTILITY FUNCTIONS
+#----------------------------------------------------------------------
+# Add universal zcat helper for various compression formats
+# This allows consistent decompression regardless of format
+cat <<EOF >> /root/.bashrc
+# Universal compressed file reader
+# Automatically detects compression format and uses appropriate tool
+zcat () {
+    if [ -f "\$@" ] ; then
+        case "\$@" in
+            # Zstandard compression
+            *.zst* )      $(which zstdcat) "\$@" ;;
+            # Bzip2 compression
+            *.bz*)       $(which zcat) "\$@" ;;
+            # Gzip compression
+            *.gz*)       $(which zcat) "\$@" ;;
+            # XZ compression
+            *.xz)        $(which zcat) "\$@" ;;
+        esac
+    else
+        echo "'\$@' is not a valid file!"
+    fi
+}
+EOF
+
+#----------------------------------------------------------------------
+# FINAL INITIALIZATION
+#----------------------------------------------------------------------
+# Apply any host overrides from environment variables
+host_override
+
+# Mark this script as complete
+liftoff
+
+# Re-enable debug output if it was previously enabled
+output_on
