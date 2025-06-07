@@ -1,0 +1,60 @@
+#!/command/with-contenv bash
+#----------------------------------------------------------------------
+# Timezone Configuration Script (01-timezone)
+#
+# Purpose: Sets the container's timezone based on the TIMEZONE
+# environment variable. This ensures all services and logs use
+# consistent timestamps across the container.
+#
+# Execution Order: Runs as 01-timezone in cont-init.d (very early)
+# Dependencies:
+#   - /assets/functions/00-container (for set_timezone function)
+#   - TIMEZONE environment variable (optional)
+#
+# Note: If TIMEZONE is not set or invalid, the container will retain
+# its default timezone (usually UTC).
+#----------------------------------------------------------------------
+
+#----------------------------------------------------------------------
+# INITIALIZATION
+#----------------------------------------------------------------------
+# Load container function library
+# This provides set_timezone, output control, and logging functions
+source /assets/functions/00-container
+
+# Disable debug output for cleaner initialization
+# This prevents verbose logging during timezone setup
+output_off
+
+# Set process name for logging purposes
+# This helps identify timezone-related messages in container logs
+PROCESS_NAME="timezone"
+
+#----------------------------------------------------------------------
+# MAIN EXECUTION
+#----------------------------------------------------------------------
+# Check if TIMEZONE environment variable is defined and not empty
+# Common values: "America/New_York", "Europe/London", "Asia/Tokyo"
+if [ -n "${TIMEZONE}" ]; then
+  # Apply timezone configuration
+  # The set_timezone function will:
+  # 1. Validate the timezone exists in /usr/share/zoneinfo/
+  # 2. Copy the timezone file to /etc/localtime
+  # 3. Update /etc/timezone with the timezone name
+  # 4. Log the change or warn if timezone is invalid
+  set_timezone "${TIMEZONE}"
+fi
+
+# Note: If TIMEZONE is not set, the container keeps its current timezone
+# This is intentional to avoid breaking systems that expect default behavior
+
+#----------------------------------------------------------------------
+# FINALIZATION
+#----------------------------------------------------------------------
+# Mark this initialization script as complete
+# This creates a flag file in /tmp/.container/ for dependency tracking
+liftoff
+
+# Re-enable debug output if it was previously enabled
+# This ensures subsequent scripts have proper debug visibility
+output_on
