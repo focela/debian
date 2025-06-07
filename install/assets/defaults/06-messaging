@@ -1,0 +1,37 @@
+#!/command/with-contenv bash
+#----------------------------------------------------------------------
+# Messaging Configuration - SMTP Settings
+#
+# Purpose: Configure SMTP email settings for container notifications
+# and alerts. This script sets defaults for connecting to mail servers
+# and sending messages from containerized applications.
+#
+# Note: This works with the CONTAINER_MESSAGING_BACKEND setting
+# (typically msmtp). All variables can be overridden at container
+# runtime using the ${VAR:-"default"} pattern.
+#----------------------------------------------------------------------
+
+#----------------------------------------------------------------------
+# SMTP SERVER CONNECTION
+#----------------------------------------------------------------------
+# Mail server details
+SMTP_HOST=${SMTP_HOST:-"postfix-relay"}
+SMTP_PORT=${SMTP_PORT:-"25"}
+
+# Domain configuration
+SMTP_DOMAIN=${SMTP_DOMAIN:-"docker"}
+SMTP_MAILDOMAIN=${SMTP_MAILDOMAIN:-"local"}
+
+#----------------------------------------------------------------------
+# SMTP SECURITY SETTINGS
+#----------------------------------------------------------------------
+# TLS/SSL configuration
+SMTP_TLS=${SMTP_TLS:-"FALSE"}
+SMTP_STARTTLS=${SMTP_STARTTLS:-"FALSE"}
+SMTP_TLSCERTCHECK=${SMTP_TLSCERTCHECK:-"FALSE"}
+
+#----------------------------------------------------------------------
+# SMTP SENDER CONFIGURATION
+#----------------------------------------------------------------------
+# Automatic FROM address generation
+SMTP_AUTO_FROM=${SMTP_AUTO_FROM:-"FALSE"}
