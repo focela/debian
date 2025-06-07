@@ -1,0 +1,17 @@
+#!/command/with-contenv bash
+#----------------------------------------------------------------------
+# Permissions Configuration
+#
+# Purpose: Configure debugging options for container permission handling.
+# This script controls verbose output during permission fixing operations
+# that may occur during container initialization.
+#
+# Note: This setting affects the verbosity of permission-related
+# operations when CONTAINER_ENABLE_PERMISSIONS is set to TRUE.
+#----------------------------------------------------------------------
+
+#----------------------------------------------------------------------
+# PERMISSIONS DEBUG CONFIGURATION
+#----------------------------------------------------------------------
+# Enable verbose debugging for permission operations
+DEBUG_PERMISSIONS=${DEBUG_PERMISSIONS:-"FALSE"}
